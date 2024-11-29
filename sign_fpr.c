@@ -66,7 +66,7 @@ fpr_scaled(int64_t i, int sc)
 	/* For now, suppose that m != 0. We normalize m to [2^63,2^64-1]. */
 	NORM64(m, sc);
 
-	/* Divide m by 2^9 to get it in [2^54,2^55-1]. THe least significant
+	/* Divide m by 2^9 to get it in [2^54,2^55-1]. The least significant
 	   bit must be sticky. */
 	sc += 9;
 	m = (m | ((m & 0x1FF) + 0x1FF)) >> 9;
@@ -128,7 +128,7 @@ fpr_add(fpr x, fpr y)
 	uint64_t yu = ((y & M52) << 3) | ((uint64_t)((ey + 0x7FF) >> 11) << 55);
 	ey -= 1078;
 
-	/* x has the larger exponent, hence ww only need to right-shift y.
+	/* x has the larger exponent, hence we only need to right-shift y.
 	   If the shift count is larger than 59 then we clamp the value
 	   to 0. */
 	uint32_t n = ex - ey;

@@ -158,7 +158,7 @@ fpr_floor(fpr x)
 	return fpr_irsh(*(int64_t *)&m, ue);
 }
 
-/* Like fpr_trunc(), but rounding toward zero. */
+/* Like fpr_rint(), but rounding toward zero. */
 static inline int64_t
 fpr_trunc(fpr x)
 {
