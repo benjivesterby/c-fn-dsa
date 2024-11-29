@@ -7,7 +7,6 @@
 /* Verified properties at this point:
       degree is acceptable
       encoded signing key has the proper size
-      seed is non-NULL
       signature buffer is large enough to receive the result
       tmp is large enough (but not necessarily aligned)  */
 static size_t
