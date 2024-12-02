@@ -633,7 +633,7 @@ zint_bezout(uint32_t *restrict u, uint32_t *restrict v,
 	 * Each input operand may be as large as 31*len bits, and we
 	 * reduce the total length by at least 31 bits at each iteration.
 	 */
-	for (uint32_t num = 62 * (uint32_t)len + 31; num >= 30; num -= 31) {
+	for (uint32_t num = 62 * (uint32_t)len + 31; num >= 31; num -= 31) {
 		/*
 		 * Extract the top 32 bits of a and b: if j is such that:
 		 *   2^(j-1) <= max(a,b) < 2^j
