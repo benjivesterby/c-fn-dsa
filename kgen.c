@@ -42,7 +42,7 @@ keygen_inner(unsigned logn, const void *seed, size_t seed_len,
 			continue;
 		}
 
-		/* (f,g) must have an acceptable orthogonolized norm. */
+		/* (f,g) must have an acceptable orthogonalized norm. */
 		if (!check_ortho_norm(logn, f, g, tmp)) {
 			continue;
 		}

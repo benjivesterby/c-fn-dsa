@@ -4,9 +4,6 @@
 
 #include "kgen_inner.h"
 
-/* Table format: first entry is kmax; it is followed by 2*kmax values
-   (formal table entries for -kmax to +kmax-1). */
-
 /* q = 12289, n = 256 -> kmax = 24 */
 static const uint16_t gauss_256[] = {
 	    1,     3,     6,    11,    22,    40,    73,   129,
