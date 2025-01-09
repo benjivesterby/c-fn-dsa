@@ -976,7 +976,7 @@ mqpoly_sqnorm_ext(unsigned logn, const uint16_t *a)
 	uint32_t sat = 0;
 	for (size_t i = 0; i < n; i ++) {
 		uint32_t x = a[i];
-		x -= Q & ((((Q - 1) >> 2) - x) >> 16);
+		x -= Q & ((((Q - 1) >> 1) - x) >> 16);
 		int32_t y = *(int32_t *)&x;
 		s += (uint32_t)(y * y);
 		sat |= s;
