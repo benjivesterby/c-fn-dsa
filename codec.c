@@ -77,6 +77,7 @@ mqpoly_encode(unsigned logn, const uint16_t *h, uint8_t *d)
 	return j;
 }
 
+#if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 size_t
 mqpoly_decode(unsigned logn, const uint8_t *d, uint16_t *h)
@@ -112,6 +113,7 @@ mqpoly_decode(unsigned logn, const uint8_t *d, uint16_t *h)
 		return j;
 	}
 }
+#endif
 
 /* see inner.h */
 int
@@ -168,6 +170,7 @@ comp_encode(unsigned logn, const int16_t *s, uint8_t *d, size_t dlen)
 	return 1;
 }
 
+#if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 int
 comp_decode(unsigned logn, const uint8_t *d, size_t dlen, int16_t *s)
@@ -231,3 +234,4 @@ comp_decode(unsigned logn, const uint8_t *d, size_t dlen, int16_t *s)
 	}
 	return 1;
 }
+#endif

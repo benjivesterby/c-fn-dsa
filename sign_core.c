@@ -96,17 +96,18 @@ sign_core(unsigned logn,
 		} else if (orig_falcon && counter == 0 && seed_len == rndlen) {
 			memcpy(rndp, seed, rndlen);
 		} else {
-			shake_context sc;
-			shake_init(&sc, 256);
-			shake_inject(&sc, seed, seed_len);
+			/* We can use the tmp buffer for the SHAKE context. */
+			shake_context *sc = (shake_context *)tmp;
+			shake_init(sc, 256);
+			shake_inject(sc, seed, seed_len);
 			uint8_t cbuf[4];
 			cbuf[0] = (uint8_t)counter;
 			cbuf[1] = (uint8_t)(counter >> 8);
 			cbuf[2] = (uint8_t)(counter >> 16);
 			cbuf[3] = (uint8_t)(counter >> 24);
-			shake_inject(&sc, cbuf, 4);
-			shake_flip(&sc);
-			shake_extract(&sc, rndp, rndlen);
+			shake_inject(sc, cbuf, 4);
+			shake_flip(sc);
+			shake_extract(sc, rndp, rndlen);
 		}
 
 		/* Hash the message into a polynomial. */

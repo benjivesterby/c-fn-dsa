@@ -57,13 +57,18 @@ typedef uint64_t fpr;
 
 /* Right-shift a 64-bit unsigned value by a possibly secret shift count.
    The shift count is between 0 and 63 (inclusive). On some 32-bit
-   architectures, support of 64-bit shifts involves conditional jumps, i.e.
-   leaking through timing measurements whether the shift was 32-bit or
-   64-bit, which is why this function is defined. */
+   architectures (especially old 32-bit PowerPC), support of 64-bit
+   shifts involves conditional jumps, i.e. leaking through timing
+   measurements whether the shift was 32-bit or 64-bit, which is why
+   this function is defined.
+
+   On ARM Cortex-M4, compilers apply a branchless sequence of 8 instructions
+   which leverages the fact that the shift opcodes actually use an 8-bit
+   count (and not 5-bit). */
 static inline uint64_t
 fpr_ursh(uint64_t x, int n)
 {
-#if FNDSA_64
+#if FNDSA_64 || FNDSA_ASM_CORTEXM4
 	return x >> n;
 #else
 	x ^= (x ^ (x >> 32)) & -(uint64_t)(n >> 5);
@@ -75,7 +80,7 @@ fpr_ursh(uint64_t x, int n)
 static inline int64_t
 fpr_irsh(int64_t x, int n)
 {
-#if FNDSA_64
+#if FNDSA_64 || FNDSA_ASM_CORTEXM4
 	return x >> n;
 #else
 	x ^= (x ^ (x >> 32)) & -(int64_t)(n >> 5);
@@ -87,7 +92,7 @@ fpr_irsh(int64_t x, int n)
 static inline uint64_t
 fpr_ulsh(uint64_t x, int n)
 {
-#if FNDSA_64
+#if FNDSA_64 || FNDSA_ASM_CORTEXM4
 	return x << n;
 #else
 	x ^= (x ^ (x << 32)) & -(uint64_t)(n >> 5);

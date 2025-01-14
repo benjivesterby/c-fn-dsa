@@ -13,6 +13,50 @@
 /* 2^64 mod q */
 #define R2          5664
 
+#if FNDSA_ASM_CORTEXM4
+/*
+ * On the ARM Cortex-M4, we use a relaxed internal representation with
+ * values in [0,q]; this makes the ext-to-int operation trivial (internal
+ * representation is a superset of external representation) and allows
+ * some speed-ups in the NTT.
+ */
+
+static inline uint32_t
+mq_add(uint32_t x, uint32_t y)
+{
+	x += y - Q;
+	x += Q & (x >> 16);
+	return x;
+}
+
+static inline uint32_t
+mq_sub(uint32_t x, uint32_t y)
+{
+	x -= y;
+	x += Q & (y >> 16);
+	return x;
+}
+
+static inline uint32_t
+mq_half(uint32_t x)
+{
+	x += Q & -(x & 1);
+	return x >> 1;
+}
+
+static inline uint32_t
+mq_mred(uint32_t x)
+{
+	uint32_t t;
+	__asm__("mul %1, %0, %3\n\tumaal %3, %0, %1, %2"
+		: "+r" (x), "=&r" (t)
+		: "r" (Q), "r" (Q1I));
+	(void)t;
+	return x;
+}
+
+#else
+
 static inline uint32_t
 mq_add(uint32_t x, uint32_t y)
 {
@@ -49,6 +93,8 @@ mq_mred(uint32_t x)
 	x = (x >> 16) * Q;
 	return (x >> 16) + 1;
 }
+
+#endif
 
 static inline uint32_t
 mq_mmul(uint32_t x, uint32_t y) {
@@ -196,6 +242,7 @@ mq_div_x16(__m256i x, __m256i y)
 
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 void
 mqpoly_small_to_int(unsigned logn, const int8_t *f, uint16_t *d)
@@ -206,6 +253,7 @@ mqpoly_small_to_int(unsigned logn, const int8_t *f, uint16_t *d)
 		d[i] = (uint16_t)(Q - (x + (Q & (x >> 16))));
 	}
 }
+#endif
 
 #if FNDSA_AVX2
 TARGET_AVX2
@@ -240,6 +288,7 @@ avx2_mqpoly_small_to_int(unsigned logn, const int8_t *f, uint16_t *d)
 }
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 void
 mqpoly_signed_to_int(unsigned logn, uint16_t *d)
@@ -250,6 +299,7 @@ mqpoly_signed_to_int(unsigned logn, uint16_t *d)
 		d[i] = (uint16_t)(Q - (x + (Q & (x >> 16))));
 	}
 }
+#endif
 
 #if FNDSA_AVX2
 TARGET_AVX2
@@ -284,9 +334,11 @@ mqpoly_int_to_small(unsigned logn, const uint16_t *d, int8_t *f)
 	size_t n = (size_t)1 << logn;
 	uint32_t ov = 0;
 	for (size_t i = 0; i < n; i ++) {
-		/* We add 128. If the value is in-range, we get an
-		   integer in [1,255]; otherwise, we get an integer
-		   in [256,q]. */
+		/* We add 128. If the value is in-range, we get an integer
+		   in [1,255]; otherwise, we get an integer in [256,q].
+		   Note that this works for both representations of zero
+		   (0 and q) if we are using a relaxed internal
+		   representation. */
 		uint32_t x = mq_add(d[i], 128);
 		ov |= x;
 		x -= 128;
@@ -338,6 +390,7 @@ avx2_mqpoly_int_to_small(unsigned logn, const uint16_t *d, int8_t *f)
 }
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 void
 mqpoly_ext_to_int(unsigned logn, uint16_t *d)
@@ -349,6 +402,7 @@ mqpoly_ext_to_int(unsigned logn, uint16_t *d)
 		d[i] = (uint16_t)x;
 	}
 }
+#endif
 
 #if FNDSA_AVX2
 TARGET_AVX2
@@ -375,6 +429,7 @@ avx2_mqpoly_ext_to_int(unsigned logn, uint16_t *d)
 }
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 void
 mqpoly_int_to_ext(unsigned logn, uint16_t *d)
@@ -386,6 +441,7 @@ mqpoly_int_to_ext(unsigned logn, uint16_t *d)
 		d[i] = (uint16_t)x;
 	}
 }
+#endif
 
 #if FNDSA_AVX2
 TARGET_AVX2
@@ -412,6 +468,7 @@ avx2_mqpoly_int_to_ext(unsigned logn, uint16_t *d)
 }
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 void
 mqpoly_int_to_ntt(unsigned logn, uint16_t *d)
@@ -439,6 +496,7 @@ mqpoly_int_to_ntt(unsigned logn, uint16_t *d)
 		t = ht;
 	}
 }
+#endif
 
 #if FNDSA_AVX2
 TARGET_AVX2
@@ -594,6 +652,7 @@ avx2_mqpoly_int_to_ntt(unsigned logn, uint16_t *d)
 }
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 void
 mqpoly_ntt_to_int(unsigned logn, uint16_t *d)
@@ -621,6 +680,7 @@ mqpoly_ntt_to_int(unsigned logn, uint16_t *d)
 		t = dt;
 	}
 }
+#endif
 
 #if FNDSA_AVX2
 TARGET_AVX2
@@ -776,6 +836,7 @@ avx2_mqpoly_ntt_to_int(unsigned logn, uint16_t *d)
 }
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 void
 mqpoly_mul_ntt(unsigned logn, uint16_t *a, const uint16_t *b)
@@ -785,6 +846,7 @@ mqpoly_mul_ntt(unsigned logn, uint16_t *a, const uint16_t *b)
 		a[i] = (uint16_t)mq_mmul(mq_mmul(a[i], b[i]), R2);
 	}
 }
+#endif
 
 #if FNDSA_AVX2
 TARGET_AVX2
@@ -818,6 +880,11 @@ mqpoly_div_ntt(unsigned logn, uint16_t *a, const uint16_t *b)
 	uint32_t r = 0xFFFFFFFF;
 	for (size_t i = 0; i < n; i ++) {
 		uint32_t x = b[i];
+#if FNDSA_ASM_CORTEXM4
+		/* In a relaxed representation, we want to detect both
+		   x = 0 and x = q. */
+		r &= -x;
+#endif
 		r &= x - Q;
 		a[i] = (uint16_t)mq_div(a[i], x);
 	}
@@ -856,6 +923,7 @@ avx2_mqpoly_div_ntt(unsigned logn, uint16_t *a, const uint16_t *b)
 }
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 void
 mqpoly_sub(unsigned logn, uint16_t *a, const uint16_t *b)
@@ -865,6 +933,7 @@ mqpoly_sub(unsigned logn, uint16_t *a, const uint16_t *b)
 		a[i] = (uint16_t)mq_sub(a[i], b[i]);
 	}
 }
+#endif
 
 #if FNDSA_AVX2
 TARGET_AVX2
@@ -898,6 +967,9 @@ mqpoly_is_invertible(unsigned logn, const int8_t *f, uint16_t *tmp)
 	mqpoly_int_to_ntt(logn, tmp);
 	uint32_t r = 0xFFFFFFFF;
 	for (size_t i = 0; i < n; i ++) {
+#if FNDSA_ASM_CORTEXM4
+		r &= -(uint32_t)tmp[i];
+#endif
 		r &= (uint32_t)tmp[i] - Q;
 	}
 	return (r >> 16) != 0;
@@ -961,6 +1033,7 @@ avx2_mqpoly_div_small(unsigned logn, const int8_t *g, const int8_t *f,
 }
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 uint32_t
 mqpoly_sqnorm_ext(unsigned logn, const uint16_t *a)
@@ -984,6 +1057,7 @@ mqpoly_sqnorm_ext(unsigned logn, const uint16_t *a)
 	s |= -(sat >> 31);
 	return s;
 }
+#endif
 
 #if FNDSA_AVX2
 TARGET_AVX2
@@ -1052,6 +1126,7 @@ avx2_mqpoly_sqnorm_ext(unsigned logn, const uint16_t *a)
 }
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 uint32_t
 mqpoly_sqnorm_signed(unsigned logn, const uint16_t *a)
@@ -1064,6 +1139,7 @@ mqpoly_sqnorm_signed(unsigned logn, const uint16_t *a)
 	}
 	return s;
 }
+#endif
 
 #if FNDSA_AVX2
 TARGET_AVX2

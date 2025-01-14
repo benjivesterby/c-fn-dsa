@@ -51,13 +51,27 @@ hash_to_point(unsigned logn,
 		shake_inject(&sc, hv, hv_len);
 	}
 	shake_flip(&sc);
-	
+
 	size_t n = (size_t)1 << logn;
 	size_t i = 0;
+#if FNDSA_ASM_CORTEXM4
+	uint8_t *sbuf = (uint8_t *)(void *)&sc;
+	size_t j = 136;
+#else
+	uint8_t sbuf[136];
+	size_t j = sizeof sbuf;
+#endif
 	while (i < n) {
-		uint8_t v[2];
-		shake_extract(&sc, v, sizeof v);
-		unsigned w = ((unsigned)v[0] << 8) | v[1];
+		if (j == 136) {
+#if FNDSA_ASM_CORTEXM4
+			shake_extract(&sc, NULL, j);
+#else
+			shake_extract(&sc, sbuf, j);
+#endif
+			j = 0;
+		}
+		unsigned w = ((unsigned)sbuf[j] << 8) | sbuf[j + 1];
+		j += 2;
 		if (w < 61445) {
 			while (w >= 12289) {
 				w -= 12289;

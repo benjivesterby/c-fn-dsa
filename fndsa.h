@@ -321,4 +321,40 @@ int fndsa_verify_weak(const void *sig, size_t sig_len,
 	const void *ctx, size_t ctx_len,
 	const char *id, const void *hv, size_t hv_len);
 
+/*
+ * The fndsa_verify_temp() and fndsa_verify_weak_temp() functions are
+ * similar to fndsa_verify() and fndsa_verify_weak(), respectively,
+ * except that temporary storage will use the provided tmp[] area (of
+ * size tmp_len bytes) instead of stack buffers. These functions are
+ * provided for the benefit of small embedded systems that have only
+ * small stacks. Temporary area sizes are as follows:
+ *
+ *    logn   min tmp_len   security
+ *   -----------------------------------------
+ *      9       2079       standard (level I)
+ *     10       4127       standard (level V)
+ *
+ *      2         47       none
+ *      3         63       none
+ *      4         95       none
+ *      5        159       none
+ *      6        287       none
+ *      7        543       very weak
+ *      8       1055       presumed weak
+ *
+ * (Formula is: 4*n+31 bytes, for degree n = 2^logn)
+ *
+ * An undersized temporary area triggers an error (returned value is zero).
+ */
+int fndsa_verify_temp(const void *sig, size_t sig_len,
+	const void *vrfy_key, size_t vrfy_key_len,
+	const void *ctx, size_t ctx_len,
+	const char *id, const void *hv, size_t hv_len,
+	void *tmp, size_t tmp_len);
+int fndsa_verify_weak_temp(const void *sig, size_t sig_len,
+	const void *vrfy_key, size_t vrfy_key_len,
+	const void *ctx, size_t ctx_len,
+	const char *id, const void *hv, size_t hv_len,
+	void *tmp, size_t tmp_len);
+
 #endif

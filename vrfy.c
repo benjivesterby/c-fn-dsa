@@ -12,7 +12,8 @@ inner_verify(unsigned logn_min, unsigned logn_max,
 	const void *sig, size_t sig_len,
         const void *vrfy_key, size_t vrfy_key_len,
         const void *ctx, size_t ctx_len,
-        const char *id, const void *hv, size_t hv_len)
+        const char *id, const void *hv, size_t hv_len,
+	void *tmp, size_t tmp_len)
 {
 	/* Get header bytes for key and signature, check that they relate
 	   to the same degree, and that it is acceptable. */
@@ -33,7 +34,14 @@ inner_verify(unsigned logn_min, unsigned logn_max,
 		return 0;
 	}
 
-	uint16_t t1[1024], t2[1024];
+	/* Check that temporary area is large enough. */
+	size_t n = (size_t)1 << logn;
+	if (tmp_len < (n * 4 + 31)) {
+		return 0;
+	}
+	tmp = (void *)(((uintptr_t)tmp + 31) & ~(uintptr_t)31);
+	uint16_t *t1 = (uint16_t *)tmp;
+	uint16_t *t2 = t1 + n;
 
 	/* t1 <- h (verifying key, decoded, converted to ntt) */
 	if (mqpoly_decode(logn, vkbuf + 1, t1) != vrfy_key_len - 1) {
@@ -172,9 +180,10 @@ fndsa_verify(const void *sig, size_t sig_len,
 			ctx, ctx_len, id, hv, hv_len);
 	}
 #endif
+	uint8_t tmp[4 * 1024 + 31];
 	return inner_verify(9, 10,
 		sig, sig_len, vrfy_key, vrfy_key_len,
-		ctx, ctx_len, id, hv, hv_len);
+		ctx, ctx_len, id, hv, hv_len, tmp, sizeof tmp);
 }
 
 /* see fndsa.h */
@@ -191,7 +200,34 @@ fndsa_verify_weak(const void *sig, size_t sig_len,
 			ctx, ctx_len, id, hv, hv_len);
 	}
 #endif
+	uint8_t tmp[4 * 256 + 31];
 	return inner_verify(2, 8,
 		sig, sig_len, vrfy_key, vrfy_key_len,
-		ctx, ctx_len, id, hv, hv_len);
+		ctx, ctx_len, id, hv, hv_len, tmp, sizeof tmp);
+}
+
+/* see fndsa.h */
+int
+fndsa_verify_temp(const void *sig, size_t sig_len,
+        const void *vrfy_key, size_t vrfy_key_len,
+        const void *ctx, size_t ctx_len,
+        const char *id, const void *hv, size_t hv_len,
+	void *tmp, size_t tmp_len)
+{
+	return inner_verify(9, 10,
+		sig, sig_len, vrfy_key, vrfy_key_len,
+		ctx, ctx_len, id, hv, hv_len, tmp, tmp_len);
+}
+
+/* see fndsa.h */
+int
+fndsa_verify_weak_temp(const void *sig, size_t sig_len,
+        const void *vrfy_key, size_t vrfy_key_len,
+        const void *ctx, size_t ctx_len,
+        const char *id, const void *hv, size_t hv_len,
+	void *tmp, size_t tmp_len)
+{
+	return inner_verify(2, 8,
+		sig, sig_len, vrfy_key, vrfy_key_len,
+		ctx, ctx_len, id, hv, hv_len, tmp, tmp_len);
 }

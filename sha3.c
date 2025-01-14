@@ -4,6 +4,13 @@
 
 #include "inner.h"
 
+/* Internal alias for the Keccak-f function. */
+#define process_block   fndsa_sha3_process_block
+
+/* Process the provided state. */
+#if FNDSA_ASM_CORTEXM4
+void process_block(uint64_t *A);
+#else
 /* Round constants. */
 static const uint64_t RC[] = {
 	0x0000000000000001, 0x0000000000008082,
@@ -19,9 +26,7 @@ static const uint64_t RC[] = {
 	0x8000000080008081, 0x8000000000008080,
 	0x0000000080000001, 0x8000000080008008
 };
-
-/* Process the provided state. */
-static void
+void
 process_block(uint64_t *A)
 {
 	uint64_t t0, t1, t2, t3, t4;
@@ -442,6 +447,7 @@ process_block(uint64_t *A)
 	A[17] = ~A[17];
 	A[20] = ~A[20];
 }
+#endif
 
 #if FNDSA_AVX2
 /* Four SHAKE256 instances in parallel. The provided array contains the
@@ -1256,6 +1262,12 @@ shake_init(shake_context *sc, unsigned size)
 	memset(sc->A, 0, sizeof sc->A);
 }
 
+#if FNDSA_ASM_CORTEXM4
+/* Inject the specified chunk by XORing the source bytes into the
+   destination. Length MUST NOT be zero. */
+void fndsa_sha3_inject_chunk(void *dst, const void *src, size_t len);
+#endif
+
 /* see inner.h */
 void
 shake_inject(shake_context *sc, const void *in, size_t len)
@@ -1267,18 +1279,20 @@ shake_inject(shake_context *sc, const void *in, size_t len)
 	rate = sc->rate;
 	buf = in;
 	while (len > 0) {
-		size_t clen, u;
-
-		clen = rate - dptr;
+		size_t clen = rate - dptr;
 		if (clen > len) {
 			clen = len;
 		}
-		for (u = 0; u < clen; u ++) {
+#if FNDSA_ASM_CORTEXM4
+		fndsa_sha3_inject_chunk((uint8_t *)sc->A + dptr, buf, clen);
+#else
+		for (size_t u = 0; u < clen; u ++) {
 			size_t v;
 
 			v = u + dptr;
 			sc->A[v >> 3] ^= (uint64_t)buf[u] << ((v & 7) << 3);
 		}
+#endif
 		dptr += clen;
 		buf += clen;
 		len -= clen;
@@ -1328,11 +1342,25 @@ shake_extract(shake_context *sc, void *out, size_t len)
 			clen = len;
 		}
 		len -= clen;
-		while (clen -- > 0) {
-			*buf ++ = (uint8_t)(sc->A[dptr >> 3]
-				>> ((dptr & 7) << 3));
-			dptr ++;
+#if FNDSA_ASM_CORTEXM4
+		/* On the ARM Cortex M4, we can assume little-endian
+		   encoding. */
+		if (buf != NULL) {
+			memcpy(buf, (uint8_t *)sc->A + dptr, clen);
+			buf += clen;
 		}
+		dptr += clen;
+#else
+		if (buf != NULL) {
+			while (clen -- > 0) {
+				*buf ++ = (uint8_t)(sc->A[dptr >> 3]
+					>> ((dptr & 7) << 3));
+				dptr ++;
+			}
+		} else {
+			dptr += clen;
+		}
+#endif
 	}
 	sc->dptr = (unsigned)dptr;
 }

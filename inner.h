@@ -162,6 +162,26 @@
 #define FNDSA_SQRT_EMU   0
 #endif
 
+/* If FNDSA_ASM_CORTEXM4 is 1, then the code will use optimized assembly
+   routines, under the assumption that it runs on an ARM Cortex-M4
+   (specifically an M4F: the hardware floating-point is not used since
+   it's only single-precision, but the FP registers are leveraged as
+   temporary storage).
+   This is not set by default because some of the routines are in
+   external assembly-only source files which the Makefile must then
+   include explicitly. That Makefile may thus set FNDSA_ASM_CORTEXM4 too. */
+#ifndef FNDSA_ASM_CORTEXM4
+#define FNDSA_ASM_CORTEXM4   0
+#endif
+
+/* Failsafe check: if ARMv7M assembly code is detected, the compiler should
+   know about it too. */
+#if FNDSA_ASM_CORTEXM4
+#if !(defined __ARM_ARCH_7EM__ && defined __ARM_FEATURE_DSP)
+#error ARMv7M+DSP assembly code selected but supported.
+#endif
+#endif
+
 /* Automatically recognize some architectures as being "64-bit", which
    mostly means that we assume that 64-bit shifts are constant-time
    with regard to the shift count. */
@@ -227,7 +247,11 @@ void shake_init(shake_context *sc, unsigned size);
 void shake_inject(shake_context *sc, const void *in, size_t len);
 /* Flip context from input to output mode. */
 void shake_flip(shake_context *sc);
-/* Extract some bytes from context. */
+/* Extract some bytes from context. If out is NULL, then len bytes are
+   still virtually extracted, but discarded.
+   In systems with little-endian encoding, the discarded bytes
+   can still be obtained from the context; this is used for saving some
+   RAM (especially stack space) on embedded systems. */
 void shake_extract(shake_context *sc, void *out, size_t len);
 
 /*
@@ -386,6 +410,9 @@ int comp_decode(unsigned logn, const uint8_t *d, size_t dlen, int16_t *s);
  *   ntt      uint16_t   (internal)
  *
  * The internal convention may change depending on the implementation.
+ * For most architectures, internal representation uses [1,q] (i.e. zero
+ * is represented by q instead of 0). The 32-bit ARMv7 code (for ARM
+ * Cortex-M4) uses [0,q] (i.e. zero can be represented by either 0 or q).
  */
 
 #define mqpoly_small_to_int           fndsa_mqpoly_small_to_int
@@ -416,8 +443,17 @@ void mqpoly_signed_to_int(unsigned logn, uint16_t *d);
    Returns 1 if all values are in [-127,+127], 0 otherwise. */
 int mqpoly_int_to_small(unsigned logn, const uint16_t *d, int8_t *f);
 
+#if FNDSA_ASM_CORTEXM4
+static inline void
+mqpoly_ext_to_int(unsigned logn, uint16_t *d)
+{
+	(void)logn;
+	(void)d;
+}
+#else
 /* Convert a polynomial from ext to int (in-place). */
 void mqpoly_ext_to_int(unsigned logn, uint16_t *d);
+#endif
 
 /* Convert a polynomial from int to ext (in-place). */
 void mqpoly_int_to_ext(unsigned logn, uint16_t *d);
@@ -541,6 +577,11 @@ tbmask(uint32_t x)
 static inline unsigned
 lzcnt(uint32_t x)
 {
+#if FNDSA_ASM_CORTEXM4
+	unsigned r;
+	__asm__ ("clz %0, %1" : "=r" (r) : "r" (x));
+	return r;
+#else
 	/* TODO: optimize on x86 and ARMv8 */
 	uint32_t m = tbmask((x >> 16) - 1);
 	uint32_t s = m & 16;
@@ -555,6 +596,7 @@ lzcnt(uint32_t x)
 	s |= m & 2;
 	x = (x >>  2) ^ (m & (x ^ (x >>  2)));
 	return (unsigned)(s + ((2 - x) & tbmask(x - 3)));
+#endif
 }
 
 /* Same as lzcnt(), but the caller ensures that the operand is non-zero.

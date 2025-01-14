@@ -55,6 +55,7 @@ lzcnt64_nonzero(uint64_t x)
 		(e) -= (int32_t)norm64_c; \
 	} while (0)
 
+#if !FNDSA_ASM_CORTEXM4
 /* see sign_inner.h */
 fpr
 fpr_scaled(int64_t i, int sc)
@@ -75,9 +76,11 @@ fpr_scaled(int64_t i, int sc)
 	   in [2^54,2^55-1]. We can use make_z() to finish the processing. */
 	return make_z(s, sc, m);
 }
+#endif
 
 #if !FNDSA_SSE2 && !FNDSA_NEON
 
+#if !FNDSA_ASM_CORTEXM4
 /* see sign_inner.h */
 fpr
 fpr_add(fpr x, fpr y)
@@ -102,7 +105,7 @@ fpr_add(fpr x, fpr y)
 	   Enforcing a swap when absolute values are equal but the sign of
 	   x is 1 (negative) avoids the two situations tagged '(*)' above.
 	   For all other situations, the result indeed has the sign of x.
-	  
+
 	   Note that for positive values, the numerical order of encoded
 	   exponent||mantissa values matches the order of the encoded
 	   values. */
@@ -153,7 +156,9 @@ fpr_add(fpr x, fpr y)
 	/* Result uses the sign of x. */
 	return make_z((uint64_t)sx, *(int32_t *)&ex, zu);
 }
+#endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see sign_inner.h */
 fpr
 fpr_mul(fpr x, fpr y)
@@ -217,7 +222,9 @@ fpr_mul(fpr x, fpr y)
 	zu &= (uint64_t)(dzu & 1) - 1;
 	return make(s, *(int32_t *)&e, zu);
 }
+#endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see sign_inner.h */
 fpr
 fpr_div(fpr x, fpr y)
@@ -265,7 +272,9 @@ fpr_div(fpr x, fpr y)
 	q &= dm;
 	return make(s, *(int32_t *)&e, q);
 }
+#endif
 
+#if !FNDSA_ASM_CORTEXM4
 /* see sign_inner.h */
 fpr
 fpr_sqrt(fpr x)
@@ -279,7 +288,7 @@ fpr_sqrt(fpr x)
 	uint32_t ex = (uint32_t)(x >> 52) & 0x7FF;
 	int32_t e = *(int32_t *)&ex - 1023;
 
-	/* If the exponent is odd, then we doulbe the mantissa, and subtract
+	/* If the exponent is odd, then we double the mantissa, and subtract
 	   1 from the exponent. We can then halve the exponent. */
 	xu += xu & -(uint64_t)((uint32_t)e & 1);
 	e >>= 1;
@@ -319,5 +328,6 @@ fpr_sqrt(fpr x)
 	q &= -(uint64_t)((ex + 0x7FF) >> 11);
 	return make_z(0, e, q);
 }
+#endif
 
 #endif

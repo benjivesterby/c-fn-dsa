@@ -91,11 +91,17 @@ sign_step1(unsigned logn, const uint8_t *sign_key,
 	vrfy_key[0] = 0x00 + logn;
 	mqpoly_encode(logn, t0, vrfy_key + 1);
 	uint8_t hashed_key[64];
-	shake_context sc;
-	shake_init(&sc, 256);
-	shake_inject(&sc, vrfy_key, FNDSA_VRFY_KEY_SIZE(logn));
-	shake_flip(&sc);
-	shake_extract(&sc, hashed_key, sizeof hashed_key);
+
+	/* We can use tmp (skipping t0 and t1) for the SHAKE256 context.
+	   The buffer currently starts with t0 (2*n bytes) then the
+	   encoded public key (less than 2*n bytes), leaving 70*n bytes,
+	   i.e. at least 280 bytes since n >= 4; the shake_context
+	   structure size is normally 208 bytes, so it fits well. */
+	shake_context *sc = (shake_context *)(t0 + 2 * n);
+	shake_init(sc, 256);
+	shake_inject(sc, vrfy_key, FNDSA_VRFY_KEY_SIZE(logn));
+	shake_flip(sc);
+	shake_extract(sc, hashed_key, sizeof hashed_key);
 
 	/* We now have f, g, F and G decoded and verified. Hashed public
 	   key is in hashed_key[]. We can proceed to the main signing loop. */

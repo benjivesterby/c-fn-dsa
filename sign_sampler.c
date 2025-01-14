@@ -55,6 +55,7 @@ static const fpr_u SIGMA_MIN[] = {
 	{ FPR(5846934829975396, -52) }    /* 1.2982803343442918540 */
 };
 
+#if !FNDSA_ASM_CORTEXM4
 /* Distribution for gaussian0() (this is the RCDT table from the
    specification, expressed in base 2^24). */
 static const uint32_t GAUSS0[][3] = {
@@ -77,6 +78,7 @@ static const uint32_t GAUSS0[][3] = {
 	{        0,        0,      198 },
 	{        0,        0,        1 }
 };
+#endif
 
 /* log(2) */
 #define LOG2   FPR(6243314768165359, -53)
@@ -93,12 +95,19 @@ sampler_init(sampler_state *ss, unsigned logn,
 	ss->logn = logn;
 }
 
+#if FNDSA_ASM_CORTEXM4
+int32_t fndsa_gaussian0_helper(uint64_t lo, uint32_t hi);
+#endif
+
 static inline int32_t
 gaussian0(sampler_state *ss)
 {
 	/* Get a random 72-bit value, into three 24-bit limbs (v0..v2). */
 	uint64_t lo = shake256x4_next_u64(&ss->pc);
 	uint32_t hi = shake256x4_next_u8(&ss->pc);
+#if FNDSA_ASM_CORTEXM4
+	return fndsa_gaussian0_helper(lo, hi);
+#else
 	uint32_t v0 = (uint32_t)lo & 0xFFFFFF;
 	uint32_t v1 = (uint32_t)(lo >> 24) & 0xFFFFFF;
 	uint32_t v2 = (uint32_t)(lo >> 48) | (hi << 16);
@@ -114,6 +123,7 @@ gaussian0(sampler_state *ss)
 		z += (int32_t)cc;
 	}
 	return z;
+#endif
 }
 
 #if FNDSA_SSE2
@@ -752,7 +762,7 @@ expm_p63(fpr x, fpr ccs)
 
 	/* TODO: maybe use 64x64->128 multiplications if available? It
 	   is a bit tricky to decide, because the plain code is used for
-	   unknown architectures, and we do not know of the larger
+	   unknown architectures, and we do not know if the larger
 	   multiplication is constant-time (it often happens that it
 	   is not). */
 
@@ -761,6 +771,17 @@ expm_p63(fpr x, fpr ccs)
 	uint32_t z0 = (uint32_t)z, z1 = (uint32_t)(z >> 32);
 	for (size_t i = 1; i < (sizeof EXPM_COEFFS) / sizeof(uint64_t); i ++) {
 		uint32_t y0 = (uint32_t)y, y1 = (uint32_t)(y >> 32);
+#if FNDSA_ASM_CORTEXM4
+		uint32_t tt, r0, r1;
+		__asm__(
+			"umull	%0, %2, %3, %5\n\t"
+			"umull	%0, %1, %3, %6\n\t"
+			"umaal	%2, %0, %4, %5\n\t"
+			"umaal	%0, %1, %4, %6\n\t"
+			: "=&r" (r0), "=&r" (r1), "=&r" (tt)
+			: "r" (y0), "r" (y1), "r" (z0), "r" (z1));
+		y = EXPM_COEFFS[i] - ((uint64_t)r0 | ((uint64_t)r1 << 32));
+#else
 		uint64_t f = (uint64_t)z0 * (uint64_t)y0;
 		uint64_t a = (uint64_t)z0 * (uint64_t)y1 + (f >> 32);
 		uint64_t b = (uint64_t)z1 * (uint64_t)y0;
@@ -769,6 +790,7 @@ expm_p63(fpr x, fpr ccs)
 			  + (uint64_t)(uint32_t)b) >> 32)
 			+ (uint64_t)z1 * (uint64_t)y1;
 		y = EXPM_COEFFS[i] - c;
+#endif
 	}
 
 	/* The scaling factor must be applied at the end. Since y is now
@@ -777,12 +799,24 @@ expm_p63(fpr x, fpr ccs)
 	uint64_t w = (uint64_t)fpr_trunc(fpr_mul2e(ccs, 63)) << 1;
 	uint32_t w0 = (uint32_t)w, w1 = (uint32_t)(w >> 32);
 	uint32_t y0 = (uint32_t)y, y1 = (uint32_t)(y >> 32);
+#if FNDSA_ASM_CORTEXM4
+	uint32_t tt, r0, r1;
+	__asm__(
+		"umull	%0, %2, %3, %5\n\t"
+		"umull	%0, %1, %3, %6\n\t"
+		"umaal	%2, %0, %4, %5\n\t"
+		"umaal	%0, %1, %4, %6\n\t"
+		: "=&r" (r0), "=&r" (r1), "=&r" (tt)
+		: "r" (y0), "r" (y1), "r" (w0), "r" (w1));
+	y = (uint64_t)r0 | ((uint64_t)r1 << 32);
+#else
 	uint64_t f = (uint64_t)w0 * (uint64_t)y0;
 	uint64_t a = (uint64_t)w0 * (uint64_t)y1 + (f >> 32);
 	uint64_t b = (uint64_t)w1 * (uint64_t)y0;
 	y = (a >> 32) + (b >> 32)
 		+ (((uint64_t)(uint32_t)a + (uint64_t)(uint32_t)b) >> 32)
 		+ (uint64_t)w1 * (uint64_t)y1;
+#endif
 	return y;
 }
 

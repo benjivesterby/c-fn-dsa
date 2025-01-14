@@ -7,6 +7,15 @@
 #include "kgen_inner.h"
 #include "sign_inner.h"
 
+/* GCC and Clang tend to be a bit trigger-happy with inlining function,
+   with a side effect of increasing stack space usage. We try to mark the
+   test_*() functions as not inlinable. */
+#if defined __GNUC__ || defined __clang__
+#define NOINLINE   __attribute__ ((noinline))
+#else
+#define NOINLINE
+#endif
+
 void *
 xmalloc(size_t len)
 {
@@ -281,11 +290,32 @@ inner_test_SHAKE256(const char *s_in, const char *s_out,
 		shake_extract(&sc, &tmp[i], 1);
 	}
 	check_eq(out, tmp, olen, "SHAKE KAT 2");
+	memset(tmp, 0, olen);
+
+	shake_init(&sc, 256);
+	for (size_t i = 0; i < ilen; i += 17) {
+		size_t clen = ilen - i;
+		if (clen > 17) {
+			clen = 17;
+		}
+		shake_inject(&sc, &in[i], clen);
+	}
+	shake_flip(&sc);
+	for (size_t i = 0; i < olen; i += 17) {
+		size_t clen = olen - i;
+		if (clen > 17) {
+			clen = 17;
+		}
+		shake_extract(&sc, &tmp[i], clen);
+	}
+	check_eq(out, tmp, olen, "SHAKE KAT 3");
+	memset(tmp, 0, olen);
 
 	printf(".");
 	fflush(stdout);
 }
 
+NOINLINE
 static void
 test_SHAKE256(void)
 {
@@ -314,6 +344,7 @@ test_SHAKE256(void)
 	fflush(stdout);
 }
 
+NOINLINE
 static void
 test_SHAKE256x4(void)
 {
@@ -325,11 +356,12 @@ test_SHAKE256x4(void)
 	shake_init(&sc, 256);
 	shake_flip(&sc);
 	shake_extract(&sc, seed_tab, sizeof seed_tab);
+	uint8_t *b1 = xmalloc(1280);
+	uint8_t *b2 = xmalloc(1280);
 	for (size_t i = 0; i <= sizeof seed_tab; i ++) {
 		shake256x4_context pc;
-		uint8_t b1[1280], b2[1280];
 		shake256x4_init(&pc, seed_tab, i);
-		for (size_t j = 0; j < sizeof b1; j ++) {
+		for (size_t j = 0; j < 1280; j ++) {
 			b1[j] = shake256x4_next_u8(&pc);
 		}
 		for (size_t k = 0; k < 4; k ++) {
@@ -342,10 +374,12 @@ test_SHAKE256x4(void)
 				shake_extract(&sc, b2 + 32 * j + 8 * k, 8);
 			}
 		}
-		check_eq(b1, b2, sizeof b1, "OUT");
+		check_eq(b1, b2, 1280, "OUT");
 		printf(".");
 		fflush(stdout);
 	}
+	xfree(b1);
+	xfree(b2);
 
 	printf(" done.\n");
 	fflush(stdout);
@@ -1756,6 +1790,7 @@ static const char *const KAT_SHA3[] = {
 	NULL
 };
 
+NOINLINE
 static void
 test_SHA3(void)
 {
@@ -1785,23 +1820,571 @@ test_SHA3(void)
 	fflush(stdout);
 }
 
+NOINLINE
 static void
-inner_test_sample_f(unsigned logn, const char *sref)
+test_modq_codec(void)
 {
-	size_t n = (size_t)1 << logn;
-	uint8_t x = logn;
-	shake256x4_context pc;
-	shake256x4_init(&pc, &x, 1);
-	int8_t f[1024];
-	sample_f(logn, &pc, f);
-	uint8_t t[1024];
-	hextobin(t, n, sref);
-	check_eq(f, t, n, "OUT");
+	printf("Test codec (mod q): ");
+	fflush(stdout);
 
-	printf(".");
+	for (unsigned logn = 2; logn <= 10; logn ++) {
+		size_t n = (size_t)1 << logn;
+		size_t elen = (size_t)7 << (logn - 2);
+		uint8_t *d = xmalloc(elen);
+		uint16_t *t1 = xmalloc(n * sizeof *t1);
+		uint16_t *t2 = xmalloc(n * sizeof *t2);
+
+		for (int i = 0; i < 32 << (10 - logn); i ++) {
+			uint8_t seed[3];
+			seed[0] = (uint8_t)logn;
+			seed[1] = (uint8_t)i;
+			seed[2] = (uint8_t)(i >> 8);
+			shake_context sc;
+			shake_init(&sc, 256);
+			shake_inject(&sc, seed, sizeof seed);
+			shake_flip(&sc);
+
+			for (size_t j = 0; j < n; j ++) {
+				uint8_t v[2];
+				shake_extract(&sc, v, sizeof v);
+				unsigned w = v[0] | ((unsigned)v[1] << 8);
+				w %= 12289;
+				t1[j] = w;
+			}
+			size_t k = mqpoly_encode(logn, t1, d);
+			if (k != elen) {
+				fprintf(stderr, "ERR encode: %zu (exp: %zu)\n",
+					k, elen);
+				exit(EXIT_FAILURE);
+			}
+			k = mqpoly_decode(logn, d, t2);
+			if (k != elen) {
+				fprintf(stderr, "ERR decode: %zu (exp: %zu)\n",
+					k, elen);
+				exit(EXIT_FAILURE);
+			}
+			for (size_t j = 0; j < n; j ++) {
+				if (t1[j] != t2[j]) {
+					fprintf(stderr, "ERR enc/dec:"
+						" j=%zu: %u -> %u\n",
+						j, t1[j], t2[j]);
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			/* Set element i mod n to 12289; this should
+			   trigger overflow detection.
+			   Note: we here assume that _encoding_ an
+			   invalid value is possible (the encode function
+			   is not validating its input) */
+			t1[i % n] = 12289;
+			mqpoly_encode(logn, t1, d);
+			k = mqpoly_decode(logn, d, t2);
+			if (k != 0) {
+				fprintf(stderr, "ERR decode: "
+					" undetected overflow, i = %d\n", i);
+				exit(EXIT_FAILURE);
+			}
+		}
+
+		xfree(d);
+		xfree(t1);
+		xfree(t2);
+
+		printf(".");
+		fflush(stdout);
+	}
+
+	printf(" done.\n");
 	fflush(stdout);
 }
 
+NOINLINE
+static void
+test_comp_codec(void)
+{
+	printf("Test codec (compressed): ");
+	fflush(stdout);
+
+	for (unsigned logn = 2; logn <= 10; logn ++) {
+		size_t n = (size_t)1 << logn;
+		size_t dlen = n * 3 + 1;
+		uint8_t *d = xmalloc(dlen);
+		int16_t *t1 = xmalloc(n * sizeof *t1);
+		int16_t *t2 = xmalloc(n * sizeof *t2);
+
+		for (int i = 0; i < 32 << (10 - logn); i ++) {
+			uint8_t seed[3];
+			seed[0] = (uint8_t)logn;
+			seed[1] = (uint8_t)i;
+			seed[2] = (uint8_t)(i >> 8);
+			shake_context sc;
+			shake_init(&sc, 256);
+			shake_inject(&sc, seed, sizeof seed);
+			shake_flip(&sc);
+
+			for (size_t j = 0; j < n; j ++) {
+				uint8_t v[2];
+				shake_extract(&sc, v, sizeof v);
+				uint32_t w = v[0] | ((unsigned)v[1] << 8);
+				uint32_t s = -(w >> 15);
+				w = ((w & 2047) ^ s) - s;
+				t1[j] = (int16_t)*(int32_t *)&w;
+			}
+			if (!comp_encode(logn, t1, d, dlen)) {
+				fprintf(stderr, "ERR encode\n");
+				exit(EXIT_FAILURE);
+			}
+			if (!comp_decode(logn, d, dlen, t2)) {
+				fprintf(stderr, "ERR decode\n");
+				exit(EXIT_FAILURE);
+			}
+			for (size_t j = 0; j < n; j ++) {
+				if (t1[j] != t2[j]) {
+					fprintf(stderr, "ERR enc/dec:"
+						" j=%zu: %d -> %d\n",
+						j, t1[j], t2[j]);
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			d[dlen - 1] ^= 0x01;
+			if (comp_decode(logn, d, dlen, t2) != 0) {
+				fprintf(stderr, "ERR padding check 1\n");
+				exit(EXIT_FAILURE);
+			}
+			d[dlen - 1] ^= 0x01;
+			size_t dlen2 = dlen;
+			while (dlen2 > 0 && d[dlen2 - 1] == 0) {
+				dlen2 --;
+			}
+			if (dlen2 == 0) {
+				fprintf(stderr, "ERR whole-zero buffer\n");
+				exit(EXIT_FAILURE);
+			}
+			if (dlen2 == dlen) {
+				fprintf(stderr, "ERR oversized output\n");
+				exit(EXIT_FAILURE);
+			}
+			if (!comp_decode(logn, d, dlen2, t2)) {
+				fprintf(stderr, "ERR padding check 2\n");
+				exit(EXIT_FAILURE);
+			}
+			size_t p = dlen2 - 1;
+			int k = 0;
+			while ((d[p] & (1 << k)) == 0) {
+				k ++;
+			}
+			if (k == 0) {
+				d[p + 1] ^= 0x80;
+				dlen2 ++;
+			} else {
+				d[p] ^= 1 << (k - 1);
+			}
+			if (comp_decode(logn, d, dlen2, t2) != 0) {
+				fprintf(stderr, "ERR padding check 3\n");
+				exit(EXIT_FAILURE);
+			}
+
+			/* Test that "minus zero" is detected will be
+			   covered in the signature verification (where we
+			   try flipping all bits one by one; heuristically
+			   signature values contain zeros). */
+		}
+
+		xfree(d);
+		xfree(t1);
+		xfree(t2);
+
+		printf(".");
+		fflush(stdout);
+	}
+
+	printf(" done.\n");
+	fflush(stdout);
+}
+
+static inline int
+same_mq_int(uint32_t x1, uint32_t x2)
+{
+#if FNDSA_ASM_CORTEXM4
+	return x1 == x2 || (x1 == 0 && x2 == 12289) || (x1 == 12289 && x2 == 0);
+#else
+	return x1 == x2;
+#endif
+}
+
+static inline int
+inrange_mq_int(uint32_t x)
+{
+#if FNDSA_ASM_CORTEXM4
+	return x <= 12289;
+#else
+	return x > 0 && x <= 12289;
+#endif
+}
+
+NOINLINE
+static void
+test_mq(void)
+{
+	printf("Test modulo q: ");
+	fflush(stdout);
+
+	for (unsigned logn = 2; logn <= 10; logn ++) {
+		size_t n = (size_t)1 << logn;
+		uint16_t *t1 = xmalloc((sizeof *t1) << logn);
+		uint16_t *t2 = xmalloc((sizeof *t2) << logn);
+		uint16_t *t3 = xmalloc((sizeof *t3) << logn);
+		uint16_t *t4 = xmalloc((sizeof *t4) << logn);
+
+		for (int i = 0; i < 32 << (10 - logn); i ++) {
+			uint8_t seed[3];
+			seed[0] = (uint8_t)logn;
+			seed[1] = (uint8_t)i;
+			seed[2] = (uint8_t)(i >> 8);
+			shake_context sc;
+			shake_init(&sc, 256);
+			shake_inject(&sc, seed, sizeof seed);
+			shake_flip(&sc);
+
+			int8_t *tb = (int8_t *)t4;
+			shake_extract(&sc, tb, n);
+			for (size_t j = 0; j < n; j ++) {
+				if (tb[j] == -128) {
+					tb[j] = -127;
+				}
+			}
+			mqpoly_small_to_int(logn, tb, t1);
+			for (size_t j = 0; j < n; j ++) {
+				int32_t xf = tb[j];
+				uint32_t x1 = t1[j];
+				int32_t y = xf <= 0 ? xf + 12289 : xf;
+				if (!same_mq_int((uint32_t)y, x1)) {
+					fprintf(stderr, "ERR small_to_int:"
+						" %d -> %u (exp: %d)\n",
+						xf, x1, y);
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			int16_t *th = (int16_t *)t4;
+			shake_extract(&sc, th, 2 * n);
+			for (size_t j = 0; j < n; j ++) {
+				th[j] = th[j] >> 4;
+				if (th[j] == -2048) {
+					th[j] = -2047;
+				}
+			}
+			uint32_t sqn1 = mqpoly_sqnorm_signed(logn, t4);
+			uint32_t sqn2 = 0;
+			for (size_t j = 0; j < n; j ++) {
+				int32_t x = th[j];
+				sqn2 += (uint32_t)(x * x);
+			}
+			if (sqn1 != sqn2) {
+				fprintf(stderr, "ERR sqnorm_signed:"
+					" %u (exp: %u)\n", sqn1, sqn2);
+				exit(EXIT_FAILURE);
+			}
+
+			memcpy(t1, t4, 2 * n);
+			mqpoly_signed_to_int(logn, t1);
+			for (size_t j = 0; j < n; j ++) {
+				int32_t xh = th[j];
+				uint32_t x1 = t1[j];
+				int32_t y = xh <= 0 ? xh + 12289 : xh;
+				if (!same_mq_int((uint32_t)y, x1)) {
+					fprintf(stderr, "ERR signed_to_int:"
+						" %d -> %d (exp: %d)\n",
+						xh, x1, y);
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			for (size_t j = 0; j < n; j ++) {
+				uint8_t v[4];
+				shake_extract(&sc, v, sizeof v);
+				t1[j] = (v[0] | ((unsigned)v[1] << 8)) % 12289;
+				t2[j] = (v[2] | ((unsigned)v[3] << 8)) % 12289;
+			}
+
+			uint32_t sqn3 = mqpoly_sqnorm_ext(logn, t1);
+			uint32_t sqn4 = 0;
+			for (size_t j = 0; j < n; j ++) {
+				int32_t x = t1[j];
+				if (x > (12289 / 2)) {
+					x -= 12289;
+				}
+				sqn4 += (uint32_t)(x * x);
+				if (sqn4 >> 31) {
+					sqn4 = 0xFFFFFFFF;
+					break;
+				}
+			}
+			if (sqn3 != sqn4) {
+				fprintf(stderr, "ERR sqnorm_ext:"
+					" %u (exp: %u)\n", sqn3, sqn4);
+				exit(EXIT_FAILURE);
+			}
+
+			memcpy(t3, t1, 2 * n);
+			mqpoly_ext_to_int(logn, t1);
+			for (size_t j = 0; j < n; j ++) {
+				uint32_t y1 = t3[j] == 0 ? 12289 : t3[j];
+				if (!same_mq_int(y1, t1[j])) {
+					fprintf(stderr, "ERR ext_to_int:"
+						" %u -> %u (exp: %u)\n",
+						t3[j], t1[j], y1);
+					exit(EXIT_FAILURE);
+				}
+			}
+			memcpy(t4, t1, 2 * n);
+			mqpoly_int_to_ext(logn, t4);
+			for (size_t j = 0; j < n; j ++) {
+				if (t4[j] != t3[j]) {
+					fprintf(stderr, "ERR int_to_ext:"
+						" %u -> %u (exp: %u)\n",
+						t1[j], t4[j], t3[j]);
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			memcpy(t4, t2, 2 * n);
+			mqpoly_ext_to_int(logn, t2);
+			for (size_t j = 0; j < n; j ++) {
+				uint32_t y2 = t4[j] == 0 ? 12289 : t4[j];
+				if (!same_mq_int(y2, t2[j])) {
+					fprintf(stderr, "ERR ext_to_int:"
+						" %u -> %u (exp: %u)\n",
+						t4[j], t2[j], y2);
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			memcpy(t3, t1, 2 * n);
+			mqpoly_sub(logn, t3, t2);
+			for (size_t j = 0; j < n; j ++) {
+				int32_t x1 = t1[j];
+				int32_t x2 = t2[j];
+				uint32_t x3 = t3[j];
+				int32_t y = x1 - x2;
+				if (y <= 0) {
+					y += 12289;
+				}
+				if (!same_mq_int((uint32_t)y, x3)) {
+					fprintf(stderr, "ERR sub:"
+						"(%d, %d) -> %d (exp: %d)\n",
+						x1, x2, x3, y);
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			memcpy(t3, t1, 2 * n);
+			mqpoly_int_to_ntt(logn, t3);
+			for (size_t j = 0; j < n; j ++) {
+				if (!inrange_mq_int(t3[j])) {
+					fprintf(stderr, "ERR ntt: %u\n", t3[j]);
+					exit(EXIT_FAILURE);
+				}
+			}
+			memcpy(t4, t3, 2 * n);
+			mqpoly_ntt_to_int(logn, t4);
+			for (size_t j = 0; j < n; j ++) {
+				if (!same_mq_int(t4[j], t1[j])) {
+					fprintf(stderr, "ERR ntt+intt:"
+						" %u vs %u\n", t4[j], t1[j]);
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			memcpy(t4, t2, 2 * n);
+			mqpoly_int_to_ntt(logn, t4);
+			for (size_t j = 0; j < n; j ++) {
+				if (!inrange_mq_int(t4[j])) {
+					fprintf(stderr, "ERR ntt: %u\n", t4[j]);
+					exit(EXIT_FAILURE);
+				}
+			}
+			mqpoly_mul_ntt(logn, t3, t4);
+			mqpoly_ntt_to_int(logn, t3);
+			for (size_t j = 0; j < n; j ++) {
+				uint64_t s = 0;
+				for (size_t k = 0; k <= j; k ++) {
+					s += t1[k] * t2[j - k];
+				}
+				s += ((uint64_t)12289 * 12289) << logn;
+				for (size_t k = j + 1; k < n; k ++) {
+					s -= t1[k] * t2[j + n - k];
+				}
+				uint32_t y = s % 12289;
+				if (y == 0) {
+					y = 12289;
+				}
+				if (!same_mq_int(y, t3[j])) {
+					fprintf(stderr,
+						"ERR mul: %u (exp: %u)\n",
+						t3[j], y);
+					exit(EXIT_FAILURE);
+				}
+			}
+		}
+
+		xfree(t1);
+		xfree(t2);
+		xfree(t3);
+		xfree(t4);
+
+		printf(".");
+		fflush(stdout);
+	}
+
+	printf(" done.\n");
+	fflush(stdout);
+}
+
+static uint64_t
+rand_u64(shake256x4_context *pc)
+{
+	uint64_t x = 0;
+	for (int i = 0; i < 4; i ++) {
+		x = (x << 16) | (uint64_t)shake256x4_next_u16(pc);
+	}
+	return x;
+}
+
+static fpr
+rand_fp(shake256x4_context *pc)
+{
+	uint64_t m = rand_u64(pc);
+	uint64_t e = (((m >> 52) & 0x7FF) % 161) + 943;
+	return (m & 0x800FFFFFFFFFFFFF) | (e << 52);
+}
+
+static void
+hash_fp(shake_context *sh, fpr x)
+{
+	uint8_t tab[8];
+	for (int i = 0; i < 8; i ++) {
+		tab[i] = (uint8_t)x;
+		x >>= 8;
+	}
+	shake_inject(sh, tab, sizeof tab);
+}
+
+NOINLINE
+static void
+test_fpr(void)
+{
+#if !FNDSA_SSE2 && !FNDSA_NEON
+	printf("Test floating-point: ");
+	fflush(stdout);
+
+	shake_context sh;
+	shake_init(&sh, 256);
+	hash_fp(&sh, FPR_ZERO);
+	hash_fp(&sh, fpr_neg(FPR_ZERO));
+	hash_fp(&sh, fpr_half(FPR_ZERO));
+	hash_fp(&sh, fpr_double(FPR_ZERO));
+	hash_fp(&sh, fpr_add(FPR_ZERO, FPR_ZERO));
+	hash_fp(&sh, fpr_add(FPR_ZERO, FPR_NZERO));
+	hash_fp(&sh, fpr_add(FPR_NZERO, FPR_ZERO));
+	hash_fp(&sh, fpr_add(FPR_NZERO, FPR_NZERO));
+	hash_fp(&sh, fpr_sub(FPR_ZERO, FPR_ZERO));
+	hash_fp(&sh, fpr_sub(FPR_ZERO, FPR_NZERO));
+	hash_fp(&sh, fpr_sub(FPR_NZERO, FPR_ZERO));
+	hash_fp(&sh, fpr_sub(FPR_NZERO, FPR_NZERO));
+
+	for (int e = -60; e <= 60; e ++) {
+		if (fpr_scaled(0, e) != FPR_ZERO) {
+			fprintf(stderr, "ERR scaled(0,%d) -> 0x%016llX\n",
+				e, (unsigned long long)fpr_scaled(0, e));
+			exit(EXIT_FAILURE);
+		}
+		for (int i = -5; i <= 5; i ++) {
+			fpr a = fpr_of(((int64_t)1 << 53) + i);
+			hash_fp(&sh, a);
+			for (int j = -5; j <= 5; j ++) {
+				fpr b = fpr_scaled(((int64_t)1 << 53) + j, e);
+				hash_fp(&sh, b);
+				hash_fp(&sh, fpr_add(a, b));
+				a = fpr_neg(a);
+				hash_fp(&sh, fpr_add(a, b));
+				b = fpr_neg(b);
+				hash_fp(&sh, fpr_add(a, b));
+				a = fpr_neg(a);
+				hash_fp(&sh, fpr_add(a, b));
+			}
+		}
+	}
+
+	shake256x4_context pc;
+	shake256x4_init(&pc, "fpemu", 5);
+	for (int32_t ctr = 1; ctr <= 65536; ctr ++) {
+		uint64_t ju = rand_u64(&pc);
+		int64_t j = *(int64_t *)&ju >> (ctr & 63);
+		fpr a = fpr_of(j);
+		hash_fp(&sh, a);
+
+		int sc = ((int32_t)shake256x4_next_u16(&pc) & 0xFF) - 128;
+		hash_fp(&sh, fpr_scaled(j, sc));
+
+		ju = rand_u64(&pc);
+		j = *(int64_t *)&ju;
+		a = fpr_scaled(j, -8);
+		hash_fp(&sh, (uint64_t)fpr_rint(a));
+
+		a = fpr_scaled(j, -52);
+		hash_fp(&sh, (uint64_t)fpr_trunc(a));
+		hash_fp(&sh, (uint64_t)fpr_floor(a));
+
+		a = rand_fp(&pc);
+		fpr b = rand_fp(&pc);
+
+		hash_fp(&sh, fpr_add(a, b));
+		hash_fp(&sh, fpr_add(b, a));
+		hash_fp(&sh, fpr_add(a, FPR_ZERO));
+		hash_fp(&sh, fpr_add(FPR_ZERO, a));
+		hash_fp(&sh, fpr_add(a, fpr_neg(a)));
+		hash_fp(&sh, fpr_add(fpr_neg(a), a));
+
+		hash_fp(&sh, fpr_sub(a, b));
+		hash_fp(&sh, fpr_sub(b, a));
+		hash_fp(&sh, fpr_sub(a, FPR_ZERO));
+		hash_fp(&sh, fpr_sub(FPR_ZERO, a));
+		hash_fp(&sh, fpr_sub(a, a));
+
+		hash_fp(&sh, fpr_neg(a));
+		hash_fp(&sh, fpr_half(a));
+		hash_fp(&sh, fpr_double(a));
+
+		hash_fp(&sh, fpr_mul(a, b));
+		hash_fp(&sh, fpr_mul(b, a));
+		hash_fp(&sh, fpr_mul(a, FPR_ZERO));
+		hash_fp(&sh, fpr_mul(FPR_ZERO, a));
+
+		hash_fp(&sh, fpr_div(a, b));
+
+		hash_fp(&sh, fpr_sqrt(a & 0x7FFFFFFFFFFFFFFF));
+
+		if ((ctr & 0x7FF) == 0) {
+			printf(".");
+			fflush(stdout);
+		}
+	}
+
+	uint8_t hbuf[32], href[32];
+	shake_flip(&sh);
+	shake_extract(&sh, hbuf, sizeof hbuf);
+	hextobin(href, sizeof href, "54ada30bdb43e1f14465d944f2a665ca7eaa6e9678e9d035b0fcb8167efe9871");
+	check_eq(hbuf, href, sizeof hbuf, "KAT");
+
+	printf(" done.\n");
+	fflush(stdout);
+#endif
+}
+
+NOINLINE
 static void
 test_fpoly(void)
 {
@@ -1810,9 +2393,13 @@ test_fpoly(void)
 
 	shake256x4_context pc;
 	shake256x4_init(&pc, "fpoly", 5);
+	int32_t *a = xmalloc(1024 * sizeof *a);
+	int32_t *b = xmalloc(1024 * sizeof *b);
+	int32_t *c = xmalloc(1024 * sizeof *c);
+	fpr *t1 = xmalloc(1024 * sizeof *t1);
+	fpr *t2 = xmalloc(1024 * sizeof *t2);
 	for (unsigned logn = 1; logn <= 10; logn ++) {
 		size_t n = (size_t)1 << logn;
-		int32_t a[1024], b[1024], c[1024];
 		for (size_t i = 0; i < n; i ++) {
 			uint16_t x = shake256x4_next_u16(&pc);
 			a[i] = *(int16_t *)&x >> 5;
@@ -1833,7 +2420,6 @@ test_fpoly(void)
 			c[k] = s;
 		}
 
-		fpr t1[1024], t2[1024];
 		for (size_t i = 0; i < n; i ++) {
 			t1[i] = fpr_of(a[i]);
 			t2[i] = fpr_of(b[i]);
@@ -1853,11 +2439,36 @@ test_fpoly(void)
 		printf(".");
 		fflush(stdout);
 	}
+	xfree(a);
+	xfree(b);
+	xfree(c);
+	xfree(t1);
+	xfree(t2);
 
 	printf(" done.\n");
 	fflush(stdout);
 }
 
+static void
+inner_test_sample_f(unsigned logn, const char *sref)
+{
+	size_t n = (size_t)1 << logn;
+	uint8_t x = logn;
+	shake256x4_context pc;
+	shake256x4_init(&pc, &x, 1);
+	int8_t *f = xmalloc(n);
+	sample_f(logn, &pc, f);
+	uint8_t *t = xmalloc(n);
+	hextobin(t, n, sref);
+	check_eq(f, t, n, "OUT");
+	xfree(f);
+	xfree(t);
+
+	printf(".");
+	fflush(stdout);
+}
+
+NOINLINE
 static void
 test_sample_f(void)
 {
@@ -1889,8 +2500,6 @@ static void
 check_keypair(unsigned logn, const uint8_t *skey, const uint8_t *vkey,
 	int8_t *f, int8_t *g, int8_t *F, int8_t *G)
 {
-	uint16_t h[1024], tmp[1024];
-
 	size_t n = (size_t)1 << logn;
 	if (skey[0] != 0x50 + logn) {
 		fprintf(stderr, "wrong signing key leading byte\n");
@@ -1900,6 +2509,8 @@ check_keypair(unsigned logn, const uint8_t *skey, const uint8_t *vkey,
 		fprintf(stderr, "wrong verifying key leading byte\n");
 		exit(EXIT_FAILURE);
 	}
+	uint16_t *h = xmalloc(n * sizeof *h);
+	uint16_t *tmp = xmalloc(n * sizeof *tmp);
 	int nbits;
 	if (logn <= 5) {
 		nbits = 8;
@@ -1960,8 +2571,12 @@ check_keypair(unsigned logn, const uint8_t *skey, const uint8_t *vkey,
 			exit(EXIT_FAILURE);
 		}
 	}
+
+	xfree(h);
+	xfree(tmp);
 }
 
+NOINLINE
 static void
 test_keygen_self(void)
 {
@@ -1972,20 +2587,33 @@ test_keygen_self(void)
 		printf(" ");
 		fflush(stdout);
 
-		uint8_t skey[FNDSA_SIGN_KEY_SIZE(10)];
-		uint8_t vkey[FNDSA_VRFY_KEY_SIZE(10)];
+		uint8_t *skey = xmalloc(FNDSA_SIGN_KEY_SIZE(logn));
+		uint8_t *vkey = xmalloc(FNDSA_VRFY_KEY_SIZE(logn));
+		size_t n = (size_t)1 << logn;
+		int8_t *f = xmalloc(n);
+		int8_t *g = xmalloc(n);
+		int8_t *F = xmalloc(n);
+		int8_t *G = xmalloc(n);
+		size_t tmp_len = 26 * n + 31;
+		void *tmp = xmalloc(tmp_len);
 		for (int i = 0; i < 10; i ++) {
 			uint8_t seed[2];
-			int8_t f[1024], g[1024], F[1024], G[1024];
 
 			seed[0] = logn;
 			seed[1] = i;
-			fndsa_keygen_seeded(logn,
-				seed, sizeof seed, skey, vkey);
+			fndsa_keygen_seeded_temp(logn,
+				seed, sizeof seed, skey, vkey, tmp, tmp_len);
 			check_keypair(logn, skey, vkey, f, g, F, G);
 			printf(".");
 			fflush(stdout);
 		}
+		xfree(skey);
+		xfree(vkey);
+		xfree(f);
+		xfree(g);
+		xfree(F);
+		xfree(G);
+		xfree(tmp);
 	}
 
 	printf(" done.\n");
@@ -2311,14 +2939,17 @@ inner_test_keygen_ref(unsigned logn, const char *const *kat)
 	fflush(stdout);
 
 	size_t n = (size_t)1 << logn;
+	uint8_t *skey = xmalloc(FNDSA_SIGN_KEY_SIZE(logn));
+	uint8_t *vkey = xmalloc(FNDSA_VRFY_KEY_SIZE(logn));
+	int8_t *ff = xmalloc(n * 4);
+	size_t tmp_len = 26 * n + 31;
+	void *tmp = xmalloc(tmp_len);
 	for (size_t i = 0; kat[i] != NULL; i ++) {
 		char seed[30];
-		uint8_t skey[FNDSA_SIGN_KEY_SIZE(10)];
-		uint8_t vkey[FNDSA_VRFY_KEY_SIZE(10)];
 		sprintf(seed, "test%zu", i);
-		fndsa_keygen_seeded(logn, seed, strlen(seed), skey, vkey);
+		fndsa_keygen_seeded_temp(logn, seed, strlen(seed),
+			skey, vkey, tmp, tmp_len);
 
-		int8_t ff[4096];
 		check_keypair(logn, skey, vkey,
 			ff, ff + n, ff + 2 * n, ff + 3 * n);
 
@@ -2333,8 +2964,13 @@ inner_test_keygen_ref(unsigned logn, const char *const *kat)
 		printf(".");
 		fflush(stdout);
 	}
+	xfree(skey);
+	xfree(vkey);
+	xfree(ff);
+	xfree(tmp);
 }
 
+NOINLINE
 static void
 test_keygen_ref(void)
 {
@@ -3118,31 +3754,35 @@ static void
 inner_test_verify(unsigned logn, const char *s_vk,
 	const char *s_msg, const char *s_sig)
 {
-	uint8_t vk[FNDSA_VRFY_KEY_SIZE(10)];
+	size_t vk_len = FNDSA_VRFY_KEY_SIZE(logn);
+	uint8_t *vk = xmalloc(vk_len);
+	size_t sig_len = FNDSA_SIGNATURE_SIZE(logn);
+	uint8_t *sig = xmalloc(sig_len);
 	uint8_t msg[100];
-	uint8_t sig[FNDSA_SIGNATURE_SIZE(10)];
 
-	size_t vk_len = hextobin(vk, sizeof vk, s_vk);
-	if (vk_len != FNDSA_VRFY_KEY_SIZE(logn)) {
-		fprintf(stderr, "wrong public key size (%zu)\n", vk_len);
+	size_t vk_len_2 = hextobin(vk, vk_len, s_vk);
+	if (vk_len != vk_len_2) {
+		fprintf(stderr, "wrong public key size (%zu)\n", vk_len_2);
 		exit(EXIT_FAILURE);
 	}
 	size_t msg_len = hextobin(msg, sizeof msg, s_msg);
-	size_t sig_len = hextobin(sig, sizeof sig, s_sig);
-	if (sig_len != FNDSA_SIGNATURE_SIZE(logn)) {
-		fprintf(stderr, "wrong signature size (%zu)\n", sig_len);
+	size_t sig_len_2 = hextobin(sig, sig_len, s_sig);
+	if (sig_len != sig_len_2) {
+		fprintf(stderr, "wrong signature size (%zu)\n", sig_len_2);
 		exit(EXIT_FAILURE);
 	}
+	size_t tmp_len = ((size_t)4 << logn) + 31;
+	void *tmp = xmalloc(tmp_len);
 
-	if (!fndsa_verify(sig, sig_len, vk, vk_len,
-		NULL, 0, "\xFF", msg, msg_len))
+	if (!fndsa_verify_temp(sig, sig_len, vk, vk_len,
+		NULL, 0, "\xFF", msg, msg_len, tmp, tmp_len))
 	{
 		fprintf(stderr, "verification failed\n");
 		exit(EXIT_FAILURE);
 	}
 	msg[0] ^= 0x01;
-	if (fndsa_verify(sig, sig_len, vk, vk_len,
-		NULL, 0, "\xFF", msg, msg_len))
+	if (fndsa_verify_temp(sig, sig_len, vk, vk_len,
+		NULL, 0, "\xFF", msg, msg_len, tmp, tmp_len))
 	{
 		fprintf(stderr, "verification should have failed (1)\n");
 		exit(EXIT_FAILURE);
@@ -3150,8 +3790,8 @@ inner_test_verify(unsigned logn, const char *s_vk,
 	msg[0] ^= 0x01;
 	for (size_t j = 0; j < (sig_len << 3); j ++) {
 		sig[j >> 3] ^= 1 << (j & 7);
-		if (fndsa_verify(sig, sig_len, vk, vk_len,
-			NULL, 0, "\xFF", msg, msg_len))
+		if (fndsa_verify_temp(sig, sig_len, vk, vk_len,
+			NULL, 0, "\xFF", msg, msg_len, tmp, tmp_len))
 		{
 			fprintf(stderr, "verification should have failed"
 				" (2, bit=%zu)\n", j);
@@ -3159,8 +3799,13 @@ inner_test_verify(unsigned logn, const char *s_vk,
 		}
 		sig[j >> 3] ^= 1 << (j & 7);
 	}
+
+	xfree(vk);
+	xfree(sig);
+	xfree(tmp);
 }
 
+NOINLINE
 static void
 test_verify(void)
 {
@@ -3190,15 +3835,12 @@ test_verify(void)
 	fflush(stdout);
 }
 
+NOINLINE
 static void
 test_self(void)
 {
 	printf("Test self: ");
 	fflush(stdout);
-
-	uint8_t sk[FNDSA_SIGN_KEY_SIZE(10)];
-	uint8_t vk[FNDSA_VRFY_KEY_SIZE(10)];
-	uint8_t sig[FNDSA_SIGNATURE_SIZE(10)];
 
 	for (unsigned logn = 2; logn <= 10; logn ++) {
 		printf("[%u]", logn);
@@ -3206,17 +3848,31 @@ test_self(void)
 		size_t sk_len = FNDSA_SIGN_KEY_SIZE(logn);
 		size_t vk_len = FNDSA_VRFY_KEY_SIZE(logn);
 		size_t sig_len = FNDSA_SIGNATURE_SIZE(logn);
+		uint8_t *sk = xmalloc(sk_len);
+		uint8_t *vk = xmalloc(vk_len);
+		uint8_t *sig = xmalloc(sig_len);
+		size_t kgentmp_len = ((size_t)26 << logn) + 31;
+		size_t signtmp_len = ((size_t)78 << logn) + 31;
+		size_t vrfytmp_len = ((size_t)4 << logn) + 31;
+		void *tmp = xmalloc(signtmp_len);
 		for (int i = 0; i < 10; i ++) {
-			fndsa_keygen(logn, sk, vk);
+			if (!fndsa_keygen_temp(logn,
+				sk, vk, tmp, kgentmp_len))
+			{
+				fprintf(stderr, "keygen failed\n");
+				exit(EXIT_FAILURE);
+			}
 			size_t j;
 			if (logn <= 8) {
-				j = fndsa_sign_weak(sk, sk_len,
+				j = fndsa_sign_weak_temp(sk, sk_len,
 					NULL, 0, FNDSA_HASH_ID_RAW,
-					"test", 4, sig, sig_len);
+					"test", 4, sig, sig_len,
+					tmp, signtmp_len);
 			} else {
-				j = fndsa_sign(sk, sk_len,
+				j = fndsa_sign_temp(sk, sk_len,
 					NULL, 0, FNDSA_HASH_ID_RAW,
-					"test", 4, sig, sig_len);
+					"test", 4, sig, sig_len,
+					tmp, signtmp_len);
 			}
 			if (j == 0) {
 				fprintf(stderr, "signature failed\n");
@@ -3229,19 +3885,23 @@ test_self(void)
 			}
 			int r1, r2;
 			if (logn <= 8) {
-				r1 = fndsa_verify_weak(sig, sig_len,
+				r1 = fndsa_verify_weak_temp(sig, sig_len,
 					vk, vk_len, NULL, 0,
-					FNDSA_HASH_ID_RAW, "test", 4);
-				r2 = fndsa_verify_weak(sig, sig_len,
+					FNDSA_HASH_ID_RAW, "test", 4,
+					tmp, vrfytmp_len);
+				r2 = fndsa_verify_weak_temp(sig, sig_len,
 					vk, vk_len, NULL, 0,
-					FNDSA_HASH_ID_RAW, "blah", 4);
+					FNDSA_HASH_ID_RAW, "blah", 4,
+					tmp, vrfytmp_len);
 			} else {
-				r1 = fndsa_verify(sig, sig_len,
+				r1 = fndsa_verify_temp(sig, sig_len,
 					vk, vk_len, NULL, 0,
-					FNDSA_HASH_ID_RAW, "test", 4);
-				r2 = fndsa_verify(sig, sig_len,
+					FNDSA_HASH_ID_RAW, "test", 4,
+					tmp, vrfytmp_len);
+				r2 = fndsa_verify_temp(sig, sig_len,
 					vk, vk_len, NULL, 0,
-					FNDSA_HASH_ID_RAW, "blah", 4);
+					FNDSA_HASH_ID_RAW, "blah", 4,
+					tmp, vrfytmp_len);
 			}
 			if (!r1) {
 				fprintf(stderr, "verify sig1 failed\n");
@@ -3255,6 +3915,11 @@ test_self(void)
 			printf(".");
 			fflush(stdout);
 		}
+
+		xfree(sk);
+		xfree(vk);
+		xfree(sig);
+		xfree(tmp);
 	}
 
 	printf(" done.\n");
@@ -3403,6 +4068,13 @@ inner_test_kat(unsigned logn, const char *const kat[])
 	uint8_t *sk = xmalloc(sk_len);
 	uint8_t *vk = xmalloc(vk_len);
 	uint8_t *sig = xmalloc(sig_len);
+	size_t kgentmp_len = ((size_t)26 << logn) + 31;
+	size_t signtmp_len = ((size_t)78 << logn) + 31;
+	size_t vrfytmp_len = ((size_t)4 << logn) + 31;
+	void *tmp = xmalloc(signtmp_len);
+	sha3_context *sc = xmalloc(sizeof *sc);
+	shake_context *pc = xmalloc(sizeof *pc);
+	uint8_t *work = xmalloc(64);
 
 	printf("[%u]", logn);
 	fflush(stdout);
@@ -3414,39 +4086,42 @@ inner_test_kat(unsigned logn, const char *const kat[])
 		seed[3] = (uint8_t)(j >> 8);
 		seed[4] = (uint8_t)(j >> 16);
 		seed[5] = (uint8_t)(j >> 24);
-		uint8_t seed_kgen[32];
-		shake_context pc;
-		shake_init(&pc, 256);
-		shake_inject(&pc, seed, sizeof seed);
-		shake_flip(&pc);
-		shake_extract(&pc, seed_kgen, sizeof seed_kgen);
-		fndsa_keygen_seeded(logn, seed_kgen, sizeof seed_kgen, sk, vk);
+		shake_init(pc, 256);
+		shake_inject(pc, seed, sizeof seed);
+		shake_flip(pc);
+		shake_extract(pc, work, 32);
+		if (!fndsa_keygen_seeded_temp(logn,
+			work, 32, sk, vk, tmp, kgentmp_len))
+		{
+			fprintf(stderr, "keygen error\n");
+			exit(EXIT_FAILURE);
+		}
 
 		seed[0] = 0x01;
 		const char *id;
 		void *msg = "message";
 		size_t msg_len = strlen(msg);
-		uint8_t hv[32];
 		if ((j & 1) == 0) {
 			id = FNDSA_HASH_ID_RAW;
 		} else {
 			id = FNDSA_HASH_ID_SHA3_256;
-			sha3_context sc;
-			sha3_init(&sc, 256);
-			sha3_update(&sc, msg, msg_len);
-			sha3_close(&sc, hv);
-			msg = hv;
-			msg_len = sizeof hv;
+			sha3_init(sc, 256);
+			sha3_update(sc, msg, msg_len);
+			sha3_close(sc, work);
+			msg = work;
+			msg_len = 32;
 		}
 		size_t r;
 		if (logn <= 8) {
-			r = fndsa_sign_weak_seeded(sk, sk_len,
+			r = fndsa_sign_weak_seeded_temp(sk, sk_len,
 				"domain", 6, id, msg, msg_len,
-				seed, sizeof seed, sig, sig_len);
+				seed, sizeof seed, sig, sig_len,
+				tmp, signtmp_len);
 		} else {
-			r = fndsa_sign_seeded(sk, sk_len,
+			r = fndsa_sign_seeded_temp(sk, sk_len,
 				"domain", 6, id, msg, msg_len,
-				seed, sizeof seed, sig, sig_len);
+				seed, sizeof seed, sig, sig_len,
+				tmp, signtmp_len);
 		}
 		if (r != sig_len) {
 			fprintf(stderr, "signature error: %zu (exp: %zu)\n",
@@ -3455,26 +4130,26 @@ inner_test_kat(unsigned logn, const char *const kat[])
 		}
 		int t;
 		if (logn <= 8) {
-			t = fndsa_verify_weak(sig, sig_len, vk, vk_len,
-				"domain", 6, id, msg, msg_len);
+			t = fndsa_verify_weak_temp(sig, sig_len, vk, vk_len,
+				"domain", 6, id, msg, msg_len,
+				tmp, vrfytmp_len);
 		} else {
-			t = fndsa_verify(sig, sig_len, vk, vk_len,
-				"domain", 6, id, msg, msg_len);
+			t = fndsa_verify_temp(sig, sig_len, vk, vk_len,
+				"domain", 6, id, msg, msg_len,
+				tmp, vrfytmp_len);
 		}
 		if (!t) {
 			fprintf(stderr, "verify error\n");
 			exit(EXIT_FAILURE);
 		}
 
-		sha3_context sc;
-		sha3_init(&sc, 256);
-		sha3_update(&sc, sk, sk_len);
-		sha3_update(&sc, vk, vk_len);
-		sha3_update(&sc, sig, sig_len);
-		uint8_t tmp[32], ref[32];
-		sha3_close(&sc, tmp);
-		hextobin(ref, sizeof ref, kat[j]);
-		check_eq(tmp, ref, 32, "KAT-hash");
+		sha3_init(sc, 256);
+		sha3_update(sc, sk, sk_len);
+		sha3_update(sc, vk, vk_len);
+		sha3_update(sc, sig, sig_len);
+		sha3_close(sc, work);
+		hextobin(work + 32, 32, kat[j]);
+		check_eq(work, work + 32, 32, "KAT-hash");
 
 		printf(".");
 		fflush(stdout);
@@ -3483,8 +4158,13 @@ inner_test_kat(unsigned logn, const char *const kat[])
 	xfree(sk);
 	xfree(vk);
 	xfree(sig);
+	xfree(tmp);
+	xfree(sc);
+	xfree(pc);
+	xfree(work);
 }
 
+NOINLINE
 static void
 test_kat(void)
 {
@@ -3505,16 +4185,9 @@ test_kat(void)
 	fflush(stdout);
 }
 
-int
-main(void)
+static void
+selftest_sha256(void)
 {
-	printf("AVX2: ");
-#if FNDSA_AVX2
-	printf("code:YES runtime:%s\n", has_avx2() ? "YES" : "NO");
-#else
-	printf("code:NO\n");
-#endif
-
 	uint8_t t1[32], t2[32];
 	sha256_context sc;
 	sha256_init(&sc);
@@ -3523,10 +4196,49 @@ main(void)
 	hextobin(t2, sizeof t2,
 	  "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08");
 	check_eq(t1, t2, sizeof t1, "KAT SHA-256");
+}
 
+#if FNDSA_ASM_CORTEXM4
+/* On an ARM Cortex-M4, we measure stack usage because embedded stack space
+   is very scarce. */
+
+NOINLINE
+static uint8_t *
+prep_stack(void)
+{
+	uint8_t tmp[3800];
+	memset(tmp, 0x54, sizeof tmp);
+	uint8_t *x = &tmp[0];
+	__asm__ __volatile__("" : "=r" (x) : "0" (x) : "memory");
+	return x;
+}
+
+NOINLINE
+static void
+measure_stack(uint8_t *tmp)
+{
+	size_t i;
+	for (i = 0; i < 3800; i ++) {
+		if (tmp[i] != 0x54) {
+			break;
+		}
+	}
+	printf("stack usage: %zu\n", 3800 - i);
+}
+#endif
+
+NOINLINE
+static void
+run_tests(void)
+{
+	selftest_sha256();
 	test_SHAKE256();
 	test_SHAKE256x4();
 	test_SHA3();
+	test_modq_codec();
+	test_comp_codec();
+	test_mq();
+	test_fpr();
 	test_fpoly();
 	test_sample_f();
 	test_sampler();
@@ -3537,5 +4249,17 @@ main(void)
 	test_verify();
 	test_self();
 	test_kat();
+}
+
+int
+main(void)
+{
+#if FNDSA_ASM_CORTEXM4
+	uint8_t *x = prep_stack();
+#endif
+	run_tests();
+#if FNDSA_ASM_CORTEXM4
+	measure_stack(x);
+#endif
 	return 0;
 }
