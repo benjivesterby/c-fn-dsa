@@ -51,3 +51,14 @@ has feature parity and similar performance, with the following notes:
 
 For build options, see the [Makefile](Makefile). In general, the code
 should work fine without needing much fiddling.
+
+## ARM Cortex-M4
+
+The implementation includes some assembly routines (some inline, and
+some in separate assembly source files) which offer substantial
+speed-ups, especially for signature generation, when running the code on
+an ARM Cortex-M4F CPU. See [Makefile.cm4](Makefile.cm4) for compiling
+that code with a cross-compiling system toolchain. Alternatively, see
+the [bench_cm4/](bench_cm4) subdirectory for a benchmarking application
+that can run on an STM32F407G-DISC1 board (using an STM32F4
+microcontroller).
