@@ -31,7 +31,7 @@ TESTOBJ = test_fndsa.o test_sampler.o test_sign.o
 all: test_fndsa
 
 clean:
-	-rm -f $(OBJ) $(TESTOBJ) test_fndsa
+	-rm -f $(OBJ) $(TESTOBJ) test_fndsa test_fndsa.gdb
 
 test_fndsa: $(OBJ) $(TESTOBJ)
 	$(LD) $(LDFLAGS) -o test_fndsa $(OBJ) $(TESTOBJ) $(LIBS)
@@ -107,7 +107,7 @@ sign_sampler_cm4.o: sign_sampler_cm4.s
 vrfy.o: vrfy.c fndsa.h inner.h
 	$(CC) $(CFLAGS) -c -o vrfy.o vrfy.c
 
-test_fndsa.o: test_fndsa.c fndsa.h inner.h
+test_fndsa.o: test_fndsa.c fndsa.h inner.h kgen_inner.h sign_inner.h
 	$(CC) $(CFLAGS) -c -o test_fndsa.o test_fndsa.c
 
 test_sampler.o: test_sampler.c sign_sampler.c fndsa.h sign_inner.h inner.h

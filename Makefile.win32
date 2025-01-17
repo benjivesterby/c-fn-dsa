@@ -83,7 +83,7 @@ sign_sampler.obj: sign_sampler.c fndsa.h sign_inner.h inner.h
 vrfy.obj: vrfy.c fndsa.h inner.h
 	$(CC) $(CFLAGS) /c /Fo:vrfy.obj vrfy.c
 
-test_fndsa.obj: test_fndsa.c fndsa.h inner.h
+test_fndsa.obj: test_fndsa.c fndsa.h inner.h kgen_inner.h sign_inner.h
 	$(CC) $(CFLAGS) /c /Fo:test_fndsa.obj test_fndsa.c
 
 test_sampler.obj: test_sampler.c sign_sampler.c fndsa.h sign_inner.h inner.h

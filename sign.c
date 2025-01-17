@@ -84,19 +84,21 @@ sign_step1(unsigned logn, const uint8_t *sign_key,
 		return 0;
 	}
 	/* t0 contains h (in ntt representation), we encode and hash
-	   the verifying key. */
+	   the verifying key.
+	   TODO: if the original Falcon mode is retained, then we can
+	   skip both encoding and hashing. */
 	mqpoly_ntt_to_int(logn, t0);
 	mqpoly_int_to_ext(logn, t0);
 	uint8_t *vrfy_key = (uint8_t *)(t0 + n);
 	vrfy_key[0] = 0x00 + logn;
 	mqpoly_encode(logn, t0, vrfy_key + 1);
-	uint8_t hashed_key[64];
 
 	/* We can use tmp (skipping t0 and t1) for the SHAKE256 context.
 	   The buffer currently starts with t0 (2*n bytes) then the
 	   encoded public key (less than 2*n bytes), leaving 70*n bytes,
 	   i.e. at least 280 bytes since n >= 4; the shake_context
 	   structure size is normally 208 bytes, so it fits well. */
+	uint8_t hashed_key[64];
 	shake_context *sc = (shake_context *)(t0 + 2 * n);
 	shake_init(sc, 256);
 	shake_inject(sc, vrfy_key, FNDSA_VRFY_KEY_SIZE(logn));

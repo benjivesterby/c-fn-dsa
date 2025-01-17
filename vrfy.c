@@ -40,6 +40,23 @@ inner_verify(unsigned logn_min, unsigned logn_max,
 		return 0;
 	}
 	tmp = (void *)(((uintptr_t)tmp + 31) & ~(uintptr_t)31);
+
+	/* Hash verifying key (SHAKE256, 64-byte output).
+	   It is omitted in the "original Falcon" mode. */
+	uint8_t hk[64];
+	if (*(const uint8_t *)id == 0xFF && id[1] == 0) {
+		/* TODO: remove original Falcon mode? */
+		memset(hk, 0, sizeof hk);
+	} else {
+		/* TODO: maybe try to use tmp for the SHAKE context?
+		   This could save some stack space. */
+		shake_context sc;
+		shake_init(&sc, 256);
+		shake_inject(&sc, vrfy_key, vrfy_key_len);
+		shake_flip(&sc);
+		shake_extract(&sc, hk, sizeof hk);
+	}
+
 	uint16_t *t1 = (uint16_t *)tmp;
 	uint16_t *t2 = t1 + n;
 
@@ -62,14 +79,6 @@ inner_verify(unsigned logn_min, unsigned logn_max,
 	/* t2 <- s2*h (converted to int) */
 	mqpoly_mul_ntt(logn, t2, t1);
 	mqpoly_ntt_to_int(logn, t2);
-
-	/* Hash verifying key (SHAKE256, 64-byte output). */
-	uint8_t hk[64];
-	shake_context sc;
-	shake_init(&sc, 256);
-	shake_inject(&sc, vrfy_key, vrfy_key_len);
-	shake_flip(&sc);
-	shake_extract(&sc, hk, sizeof hk);
 
 	/* Hash message into polynomial c (into t1, converted to int) */
 	hash_to_point(logn, sigbuf + 1, hk,

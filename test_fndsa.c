@@ -2272,6 +2272,24 @@ hash_fp(shake_context *sh, fpr x)
 	shake_inject(sh, tab, sizeof tab);
 }
 
+static void
+check_add_sub(fpr x, fpr y)
+{
+	fpr a, b;
+	FPR_ADD_SUB(a, b, x, y);
+	fpr ar = fpr_add(x, y);
+	fpr br = fpr_sub(x, y);
+	if (a != ar || b != br) {
+		fprintf(stderr, "ERR add/sub, x = 0x%016llX, y = 0x%016llX:\n",
+			(unsigned long long)x, (unsigned long long)y);
+		fprintf(stderr, "got: x+y = 0x%016llX  x-y = 0x%016llX\n",
+			(unsigned long long)a, (unsigned long long)b);
+		fprintf(stderr, "exp: x+y = 0x%016llX  x-y = 0x%016llX\n",
+			(unsigned long long)ar, (unsigned long long)br);
+		exit(EXIT_FAILURE);
+	}
+}
+
 NOINLINE
 static void
 test_fpr(void)
@@ -2295,6 +2313,11 @@ test_fpr(void)
 	hash_fp(&sh, fpr_sub(FPR_NZERO, FPR_ZERO));
 	hash_fp(&sh, fpr_sub(FPR_NZERO, FPR_NZERO));
 
+	check_add_sub(FPR_ZERO, FPR_ZERO);
+	check_add_sub(FPR_ZERO, FPR_NZERO);
+	check_add_sub(FPR_NZERO, FPR_ZERO);
+	check_add_sub(FPR_NZERO, FPR_NZERO);
+
 	for (int e = -60; e <= 60; e ++) {
 		if (fpr_scaled(0, e) != FPR_ZERO) {
 			fprintf(stderr, "ERR scaled(0,%d) -> 0x%016llX\n",
@@ -2308,12 +2331,16 @@ test_fpr(void)
 				fpr b = fpr_scaled(((int64_t)1 << 53) + j, e);
 				hash_fp(&sh, b);
 				hash_fp(&sh, fpr_add(a, b));
+				check_add_sub(a, b);
 				a = fpr_neg(a);
 				hash_fp(&sh, fpr_add(a, b));
+				check_add_sub(a, b);
 				b = fpr_neg(b);
 				hash_fp(&sh, fpr_add(a, b));
+				check_add_sub(a, b);
 				a = fpr_neg(a);
 				hash_fp(&sh, fpr_add(a, b));
+				check_add_sub(a, b);
 			}
 		}
 	}
@@ -2340,6 +2367,8 @@ test_fpr(void)
 
 		a = rand_fp(&pc);
 		fpr b = rand_fp(&pc);
+
+		check_add_sub(a, b);
 
 		hash_fp(&sh, fpr_add(a, b));
 		hash_fp(&sh, fpr_add(b, a));

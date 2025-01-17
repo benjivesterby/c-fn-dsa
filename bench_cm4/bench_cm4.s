@@ -47,3 +47,24 @@ BENCH	bench_iNTT,    fndsa_mqpoly_ntt_to_int
 do_nothing:
 	bx	lr
 	.size	do_nothing,.-do_nothing
+
+@ A special bench function for fndsa_fpr_add_sub, which uses a non-standard
+@ ABI and requires the caller to save many more registers.
+	.align	2
+	.global	bench_add_sub
+	.thumb
+	.thumb_func
+bench_add_sub:
+	push.w	{ r4, r5, r6, r7, r8, r10, r11, lr }
+	movw	r11, #(SYSCNT_ADDR & 0xFFFF)
+	movt	r11, #(SYSCNT_ADDR >> 16)
+	vmov	s1, r11
+	ldr.w	r10, [r11]
+	vmov	s0, r10
+	bl	fndsa_fpr_add_sub
+	vmov	r11, s1
+	ldr.w	r0, [r11]
+	vmov	r10, s0
+	sub.w	r0, r0, r10
+	pop	{ r4, r5, r6, r7, r8, r10, r11, pc }
+	.size	bench_add_sub,.-bench_add_sub

@@ -8,7 +8,8 @@
 #include <libopencm3/stm32/usart.h>
 #include <libopencm3/stm32/flash.h>
 
-#include "inner.h"
+#include "../inner.h"
+#include "../sign_inner.h"
 
 /* Send len copies of character c onto the output UART. */
 static void
@@ -354,6 +355,23 @@ enc32le(void *dst, uint32_t x)
 #define FREQ   24
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
+/* We must include a dummy fndsa_fpr_add_sub() for benchmark purposes, in
+   case assembly routines have been disabled; otherwise, there will be a
+   link error.
+   The dummy does an addition and a subtraction, so that the overall cost
+   is close to what the real code sequence would do; the two output values
+   are XORed so that result fits in the ABI, and the compiler does not
+   elide any call. */
+uint64_t
+fndsa_fpr_add_sub(fpr x, fpr y)
+{
+	fpr a = fpr_add(x, y);
+	fpr b = fpr_sub(x, y);
+	return a ^ b;
+}
+#endif
+
 int
 main(void)
 {
@@ -449,23 +467,42 @@ main(void)
 	extern uint32_t bench_keccak(uint64_t *A);
 	extern uint32_t bench_NTT(unsigned logn, uint16_t *d);
 	extern uint32_t bench_iNTT(unsigned logn, uint16_t *d);
+	extern uint32_t bench_add_sub(void);
 
 	/* bench_none() measures a function with inherent cost 2 cycles. */
 	uint32_t cal = bench_none() - 2;
-	prf("fpr_scaled: %5u\n", bench_scaled() - cal);
-	prf("fpr_add:    %5u\n", bench_add() - cal);
-	prf("fpr_mul:    %5u\n", bench_mul() - cal);
-	prf("fpr_div:    %5u\n", bench_div() - cal);
-	prf("fpr_sqrt:   %5u\n", bench_sqrt() - cal);
-	prf("keccak:     %5u\n", bench_keccak(tmp_aligned) - cal);
-	prf("NTT:        n=256: %5u   n=512: %5u   n=1024: %5u\n",
+	/* bench_add_sub() must perform two additional vmov in the call
+	   sequence to the special fndsa_fpr_add_sub() function. */
+	prf("fpr_scaled:   %5u\n", bench_scaled() - cal);
+	prf("fpr_add:      %5u\n", bench_add() - cal);
+	prf("fpr_add_sub:  %5u\n", bench_add_sub() - cal - 2);
+	prf("fpr_mul:      %5u\n", bench_mul() - cal);
+	prf("fpr_div:      %5u\n", bench_div() - cal);
+	prf("fpr_sqrt:     %5u\n", bench_sqrt() - cal);
+	prf("keccak:       %5u\n", bench_keccak(tmp_aligned) - cal);
+	prf("NTT:          n=256: %6u   n=512: %6u   n=1024: %6u\n",
 		bench_NTT(8, tmp_aligned) - cal,
 		bench_NTT(9, tmp_aligned) - cal,
 		bench_NTT(10, tmp_aligned) - cal);
-	prf("iNTT:       n=256: %5u   n=512: %5u   n=1024: %5u\n",
+	prf("iNTT:         n=256: %6u   n=512: %6u   n=1024: %6u\n",
 		bench_iNTT(8, tmp_aligned) - cal,
 		bench_iNTT(9, tmp_aligned) - cal,
 		bench_iNTT(10, tmp_aligned) - cal);
+
+	/* Measure the time it takes to hash the public key. */
+	uint32_t time_hvk[3];
+	for (unsigned logn = 8; logn <= 10; logn ++) {
+		shake_context *sc = tmp_aligned;
+		uint32_t begin = get_system_ticks();
+		shake_init(sc, 256);
+		shake_inject(sc, vkey, FNDSA_VRFY_KEY_SIZE(logn));
+		shake_flip(sc);
+		shake_extract(sc, sig, 64);
+		uint32_t end = get_system_ticks();
+		time_hvk[logn - 8] = end - begin;
+	}
+	prf("hash(vkey):   n=256: %6u   n=512: %6u   n=1024: %6u\n",
+		time_hvk[0], time_hvk[1], time_hvk[2]);
 
 	/* For each degree, we make one measurement with a reproducible
 	   seed value. Seed was chosen such that the hash-to-point cost
@@ -473,14 +510,15 @@ main(void)
 	   SHAKE256 output, which in turn implies a variable number of
 	   invocations of Keccak-f. We consider the two most common numbers
 	   of calls to Keccak-f, and the seed exercises the higher of these
-	   two numbers.
-	   We also record the signing time as a "reference" value so as
-	   to detect restarts. */
-	uint32_t ref_time_sign[3];
+	   two numbers. */
 	for (unsigned logn = 8; logn <= 10; logn ++) {
 		uint8_t seed[2];
 		seed[0] = (uint8_t)logn;
-		seed[1] = logn == 9 ? 3 : 0;
+		switch (logn) {
+		case 8:  seed[1] = 1; break;
+		case 9:  seed[1] = 3; break;
+		default: seed[1] = 0; break;
+		}
 		uint8_t *tmp = logn < 10 ? tmp_small : tmp_big;
 		size_t tmp_len = ((size_t)78 << logn) + 31;
 		size_t skey_len = FNDSA_SIGN_KEY_SIZE(logn);
@@ -497,15 +535,6 @@ main(void)
 		}
 		end = get_system_ticks();
 		uint32_t time_kgen = end - begin;
-
-		shake_context *sc = tmp_aligned;
-		begin = get_system_ticks();
-		shake_init(sc, 256);
-		shake_inject(sc, vkey, vkey_len);
-		shake_flip(sc);
-		shake_extract(sc, tmp_aligned, 64);
-		end = get_system_ticks();
-		uint32_t time_hpk = end - begin;
 
 		size_t j;
 		begin = get_system_ticks();
@@ -524,7 +553,6 @@ main(void)
 			break;
 		}
 		uint32_t time_sign = end - begin;
-		ref_time_sign[logn - 8] = time_sign;
 
 		int r;
 		begin = get_system_ticks();
@@ -544,17 +572,49 @@ main(void)
 		end = get_system_ticks();
 		uint32_t time_vrfy = end - begin;
 
+		/* Second signature is in "original Falcon" mode (no
+		   context string, no hashed public key). */
+		if (logn >= 9) {
+			j = fndsa_sign_seeded_temp(skey, skey_len,
+				NULL, 0, "\xFF", "blah", 4,
+				seed, sizeof seed, sig, sig_len, tmp, tmp_len);
+		} else {
+			j = fndsa_sign_weak_seeded_temp(skey, skey_len,
+				NULL, 0, "\xFF", "blah", 4,
+				seed, sizeof seed, sig, sig_len, tmp, tmp_len);
+		}
+		if (j != sig_len) {
+			prf("ERR sign (2): %u\n", j);
+			break;
+		}
+		begin = get_system_ticks();
+		if (logn >= 9) {
+			r = fndsa_verify_temp(sig, sig_len, vkey, vkey_len,
+				NULL, 0, "\xFF", "blah", 4,
+				tmp, tmp_len);
+		} else {
+			r = fndsa_verify_weak_temp(sig, sig_len, vkey, vkey_len,
+				NULL, 0, "\xFF", "blah", 4,
+				tmp, tmp_len);
+		}
+		if (!r) {
+			prf("ERR verify (2)\n");
+			break;
+		}
+		end = get_system_ticks();
+		uint32_t time_orig = end - begin;
+
 		prf("FN-DSA(n = %4u)"
-			"  kgen: %9u  sign: %8u  vrfy: %6u  hpk: %6u\n",
-			1u << logn, time_kgen, time_sign, time_vrfy, time_hpk);
+			"  kgen: %9u  sign: %8u  vrfy: %6u  orig: %6u\n",
+			1u << logn, time_kgen, time_sign, time_vrfy, time_orig);
 	}
 
 	/* Long-run measurements. */
 	uint64_t total_kgen[3] = { 0, 0, 0 };
 	uint64_t total_sign[3] = { 0, 0, 0 };
-	uint64_t total_sign_restart[3] = { 0, 0, 0 };
+	uint64_t total_sign_orig[3] = { 0, 0, 0 };
 	uint64_t total_vrfy[3] = { 0, 0, 0 };
-	uint32_t total_num_restart[3] = { 0, 0, 0 };
+	uint64_t total_vrfy_orig[3] = { 0, 0, 0 };
 	for (uint32_t total_num = 1;; total_num ++) {
 		for (unsigned logn = 8; logn <= 10; logn ++) {
 			uint8_t seed[5];
@@ -596,7 +656,6 @@ main(void)
 				break;
 			}
 			uint32_t time_sign = end - begin;
-			ref_time_sign[logn - 8] = time_sign;
 
 			int r;
 			begin = get_system_ticks();
@@ -618,14 +677,49 @@ main(void)
 			end = get_system_ticks();
 			uint32_t time_vrfy = end - begin;
 
+			begin = get_system_ticks();
+			if (logn >= 9) {
+				j = fndsa_sign_seeded_temp(skey, skey_len,
+					NULL, 0, "\xFF", "blah", 4,
+					seed, sizeof seed,
+					sig, sig_len, tmp, tmp_len);
+			} else {
+				j = fndsa_sign_weak_seeded_temp(skey, skey_len,
+					NULL, 0, "\xFF", "blah", 4,
+					seed, sizeof seed,
+					sig, sig_len, tmp, tmp_len);
+			}
+			end = get_system_ticks();
+			if (j != sig_len) {
+				prf("ERR sign: %u\n", j);
+				break;
+			}
+			uint32_t time_sign_orig = end - begin;
+
+			begin = get_system_ticks();
+			if (logn >= 9) {
+				r = fndsa_verify_temp(
+					sig, sig_len, vkey, vkey_len,
+					NULL, 0, "\xFF", "blah", 4,
+					tmp, tmp_len);
+			} else {
+				r = fndsa_verify_weak_temp(
+					sig, sig_len, vkey, vkey_len,
+					NULL, 0, "\xFF", "blah", 4,
+					tmp, tmp_len);
+			}
+			if (!r) {
+				prf("ERR verify\n");
+				break;
+			}
+			end = get_system_ticks();
+			uint32_t time_vrfy_orig = end - begin;
+
 			total_kgen[logn - 8] += time_kgen;
 			total_sign[logn - 8] += time_sign;
 			total_vrfy[logn - 8] += time_vrfy;
-			uint32_t rts = ref_time_sign[logn - 8];
-			if (time_sign > (rts + (rts >> 1))) {
-				total_sign_restart[logn - 8] += time_sign;
-				total_num_restart[logn - 8] ++;
-			}
+			total_sign_orig[logn - 8] += time_sign_orig;
+			total_vrfy_orig[logn - 8] += time_vrfy_orig;
 		}
 
 		if (total_num <= 10 || (total_num % 100) == 0) {
@@ -633,22 +727,15 @@ main(void)
 			uint32_t na = nu >> 1;
 			prf("\nnum = %u\n", nu);
 			for (unsigned logn = 8; logn <= 10; logn ++) {
-				uint32_t tk, ts, ts2, tv, rs;
+				uint32_t tk, ts, tso, tv, tvo;
 				tk = (total_kgen[logn - 8] + na) / nu;
 				ts = (total_sign[logn - 8] + na) / nu;
 				tv = (total_vrfy[logn - 8] + na) / nu;
-				rs = total_num_restart[logn - 8];
-				if (rs == nu) {
-					ts2 = 0;
-				} else {
-					uint32_t nu2 = nu - rs;
-					ts2 = (total_sign[logn - 8]
-						- total_sign_restart[logn - 8]
-						+ (nu2 >> 1)) / nu;
-				}
+				tso = (total_sign_orig[logn - 8] + na) / nu;
+				tvo = (total_vrfy_orig[logn - 8] + na) / nu;
 				prf("FN-DSA(n = %4u)  kg: %9u  sg: %8u"
-					"  (%8u)  vf: %6u  rs=%u\n",
-					1u << logn, tk, ts, ts2, tv, rs);
+					" (%8u)  vf: %6u (%6u)\n",
+					1u << logn, tk, ts, tso, tv, tvo);
 			}
 		} else {
 			prf(".");

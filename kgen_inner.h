@@ -97,7 +97,18 @@ mp_sub(uint32_t a, uint32_t b, uint32_t p)
 static inline uint32_t
 mp_half(uint32_t a, uint32_t p)
 {
+#if FNDSA_ASM_CORTEXM4
+	uint32_t t;
+	__asm__(
+		"ubfx	%1, %0, #0, #1\n\t"
+		"umlal	%0, %1, %1, %2\n\t"
+		"lsr.w	%0, %0, #1"
+		: "+r" (a), "=&r" (t)
+		: "r" (p));
+	return a;
+#else
 	return (a + (p & -(a & 1))) >> 1;
+#endif
 }
 
 /* Montgomery multiplication: return (a*b)/R mod p.
@@ -106,10 +117,24 @@ mp_half(uint32_t a, uint32_t p)
 static inline uint32_t
 mp_mmul(uint32_t a, uint32_t b, uint32_t p, uint32_t p0i)
 {
+#if FNDSA_ASM_CORTEXM4
+	uint32_t d;
+	__asm__(
+		"umull	%0, %2, %0, %1\n\t"
+		"mul	%1, %0, %4\n\t"
+		"umlal	%0, %2, %1, %3\n\t"
+		"sub.w	%2, %2, %3\n\t"
+		"and	%0, %3, %2, asr #31\n\t"
+		"add.w	%2, %2, %0"
+		: "+r" (a), "+r" (b), "=&r" (d)
+		: "r" (p), "r" (p0i));
+	return d;
+#else
 	uint64_t z = (uint64_t)a * (uint64_t)b;
 	uint32_t w = (uint32_t)z * p0i;
 	uint32_t d = (uint32_t)((z + (uint64_t)w * (uint64_t)p) >> 32) - p;
 	return d + (p & tbmask(d));
+#endif
 }
 
 /* Return 2^(31*e) mod p. This function assumes that e is not secret. */
@@ -130,11 +155,6 @@ mp_Rx31(unsigned e, uint32_t p, uint32_t p0i, uint32_t R2)
 		x = mp_mmul(x, x, p, p0i);
 	}
 }
-
-/* Division modulo p (x = dividend, y = divisor).
-   If y is non-invertible (i.e. zero), then zero is returned. */
-#define mp_div   fndsa_mp_div
-uint32_t mp_div(uint32_t x, uint32_t y, uint32_t p);
 
 /* Compute the roots for NTT and inverse NTT; given g (primitive 2048-th
    root of 1 modulo p), this fills gm[] and igm[] with powers of g and 1/g:
@@ -494,7 +514,23 @@ fxr_abs(fxr x)
 static inline fxr
 fxr_mul(fxr x, fxr y)
 {
-#if (defined __GNUC__ || defined __clang__) && defined __SIZEOF_INT128__
+#if FNDSA_ASM_CORTEXM4
+	uint32_t x0 = (uint32_t)x.v;
+	uint32_t x1 = (uint32_t)(x.v >> 32);
+	uint32_t y0 = (uint32_t)y.v;
+	uint32_t y1 = (uint32_t)(y.v >> 32);
+	uint32_t z0, z1, tt;
+	__asm__(
+		"and	%0, %4, %5, asr #31\n\t"
+		"and	%1, %6, %3, asr #31\n\t"
+		"umaal	%1, %0, %4, %6\n\t"
+		"umull	%2, %0, %3, %5\n\t"
+		"smlal	%0, %1, %3, %6\n\t"
+		"smlal	%0, %1, %4, %5"
+		: "=&r" (z0), "=&r" (z1), "=&r" (tt)
+		: "r" (x0), "r" (x1), "r" (y0), "r" (y1));
+	return (fxr) { (uint64_t)z0 | ((uint64_t)z1 << 32) };
+#elif (defined __GNUC__ || defined __clang__) && defined __SIZEOF_INT128__
 	/* If __int128 is supported then the underlying platform is
 	   assumed to be 64-bit and have native support for the 64x64->128
 	   multiplication. Note that there are some existing 64-bit CPUs
@@ -519,7 +555,21 @@ fxr_mul(fxr x, fxr y)
 static inline fxr
 fxr_sqr(fxr x)
 {
-#if (defined __GNUC__ || defined __clang__) && defined __SIZEOF_INT128__
+#if FNDSA_ASM_CORTEXM4
+	uint32_t x0 = (uint32_t)x.v;
+	uint32_t x1 = (uint32_t)(x.v >> 32);
+	uint32_t z0, z1, tt;
+	__asm__(
+		"and	%0, %4, %3, asr #31\n\t"
+		"mov.w	%1, %0\n\t"
+		"umaal	%1, %0, %4, %4\n\t"
+		"umull	%2, %0, %3, %3\n\t"
+		"smlal	%0, %1, %3, %4\n\t"
+		"smlal	%0, %1, %4, %3"
+		: "=&r" (z0), "=&r" (z1), "=&r" (tt)
+		: "r" (x0), "r" (x1));
+	return (fxr) { (uint64_t)z0 | ((uint64_t)z1 << 32) };
+#elif (defined __GNUC__ || defined __clang__) && defined __SIZEOF_INT128__
 	/* If __int128 is supported then the underlying platform is
 	   assumed to be 64-bit and have native support for the 64x64->128
 	   multiplication. Note that there are some existing 64-bit CPUs

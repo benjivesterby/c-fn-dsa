@@ -125,7 +125,7 @@ sign_sampler.o: sign_sampler.c fndsa.h sign_inner.h inner.h
 vrfy.o: vrfy.c fndsa.h inner.h
 	$(CC) $(CFLAGS) -c -o vrfy.o vrfy.c
 
-test_fndsa.o: test_fndsa.c fndsa.h inner.h
+test_fndsa.o: test_fndsa.c fndsa.h inner.h kgen_inner.h sign_inner.h
 	$(CC) $(CFLAGS) -c -o test_fndsa.o test_fndsa.c
 
 test_sampler.o: test_sampler.c sign_sampler.c fndsa.h sign_inner.h inner.h

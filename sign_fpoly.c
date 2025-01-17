@@ -1258,10 +1258,8 @@ fpoly_FFT(unsigned logn, fpr *f)
 				fpr y_im = f[j2 + hn];
 				fpr z_re, z_im;
 				FPC_MUL(z_re, z_im, y_re, y_im, s_re, s_im);
-				f[j1] = fpr_add(x_re, z_re);
-				f[j1 + hn] = fpr_add(x_im, z_im);
-				f[j2] = fpr_sub(x_re, z_re);
-				f[j2 + hn] = fpr_sub(x_im, z_im);
+				FPR_ADD_SUB(f[j1], f[j2], x_re, z_re);
+				FPR_ADD_SUB(f[j1 + hn], f[j2 + hn], x_im, z_im);
 			}
 			j0 += t;
 		}
@@ -1547,10 +1545,8 @@ fpoly_iFFT(unsigned logn, fpr *f)
 				fpr x_im = f[j1 + hn];
 				fpr y_re = f[j2];
 				fpr y_im = f[j2 + hn];
-				f[j1] = fpr_add(x_re, y_re);
-				f[j1 + hn] = fpr_add(x_im, y_im);
-				x_re = fpr_sub(x_re, y_re);
-				x_im = fpr_sub(x_im, y_im);
+				FPR_ADD_SUB(f[j1], x_re, x_re, y_re);
+				FPR_ADD_SUB(f[j1 + hn], x_im, x_im, y_im);
 				FPC_MUL(x_re, x_im, x_re, x_im, s_re, s_im);
 				f[j2] = x_re;
 				f[j2 + hn] = x_im;
@@ -2262,20 +2258,17 @@ fpoly_split_fft(unsigned logn, fpr *f0, fpr *f1, const fpr *f)
 	for (size_t i = 0; i < qn; i ++) {
 		fpr a_re = f[(i << 1) + 0], a_im = f[(i << 1) + 0 + hn];
 		fpr b_re = f[(i << 1) + 1], b_im = f[(i << 1) + 1 + hn];
-		fpr t_re, t_im;
+		fpr t_re, t_im, u_re, u_im;
 
-		t_re = fpr_add(a_re, b_re);
-		t_im = fpr_add(a_im, b_im);
+		FPR_ADD_SUB(t_re, u_re, a_re, b_re);
+		FPR_ADD_SUB(t_im, u_im, a_im, b_im);
 		f0[i] = fpr_half(t_re);
 		f0[i + qn] = fpr_half(t_im);
-
-		t_re = fpr_sub(a_re, b_re);
-		t_im = fpr_sub(a_im, b_im);
-		FPC_MUL(t_re, t_im, t_re, t_im,
+		FPC_MUL(u_re, u_im, u_re, u_im,
 			GM[((i + hn) << 1) + 0],
 			fpr_neg(GM[((i + hn) << 1) + 1]));
-		f1[i] = fpr_half(t_re);
-		f1[i + qn] = fpr_half(t_im);
+		f1[i] = fpr_half(u_re);
+		f1[i + qn] = fpr_half(u_im);
 	}
 #endif
 }
@@ -2358,15 +2351,14 @@ fpoly_split_selfadj_fft(unsigned logn, fpr *f0, fpr *f1, const fpr *f)
 	for (size_t i = 0; i < qn; i ++) {
 		fpr a_re = f[(i << 1) + 0];
 		fpr b_re = f[(i << 1) + 1];
-		fpr t_re;
+		fpr t_re, u_re;
 
-		t_re = fpr_add(a_re, b_re);
+		FPR_ADD_SUB(t_re, u_re, a_re, b_re);
 		f0[i] = fpr_half(t_re);
 		f0[i + qn] = FPR_ZERO;
-
-		t_re = fpr_half(fpr_sub(a_re, b_re));
-		f1[i] = fpr_mul(t_re, GM[((i + hn) << 1) + 0]);
-		f1[i + qn] = fpr_mul(t_re, fpr_neg(GM[((i + hn) << 1) + 1]));
+		u_re = fpr_half(u_re);
+		f1[i] = fpr_mul(u_re, GM[((i + hn) << 1) + 0]);
+		f1[i + qn] = fpr_mul(u_re, fpr_neg(GM[((i + hn) << 1) + 1]));
 	}
 #endif
 }
@@ -2462,10 +2454,12 @@ fpoly_merge_fft(unsigned logn, fpr *f, const fpr *f0, const fpr *f1)
 		fpr b_re = f1[i], b_im = f1[i + qn];
 		FPC_MUL(b_re, b_im, b_re, b_im,
 			GM[((i + hn) << 1) + 0], GM[((i + hn) << 1) + 1]);
-		f[(i << 1) + 0] = fpr_add(a_re, b_re);
-		f[(i << 1) + 0 + hn] = fpr_add(a_im, b_im);
-		f[(i << 1) + 1] = fpr_sub(a_re, b_re);
-		f[(i << 1) + 1 + hn] = fpr_sub(a_im, b_im);
+		FPR_ADD_SUB(
+			f[(i << 1) + 0], f[(i << 1) + 1],
+			a_re, b_re);
+		FPR_ADD_SUB(
+			f[(i << 1) + 0 + hn], f[(i << 1) + 1 + hn],
+			a_im, b_im);
 	}
 #endif
 }
