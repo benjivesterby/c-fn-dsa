@@ -450,7 +450,7 @@ main(void)
 	   is the time taken. These primitives have a constant execution
 	   time (independent of the input values). Some need extra
 	   parameters:
-	       bench_keccak()   200-byte buffer
+	       bench_keccak()   200-byte buffer, number of data words
 	       bench_NTT()      degree (logn, 2 to 10) and 2*n-byte buffer
 	       bench_iNTT()     degree (logn, 2 to 10) and 2*n-byte buffer
 	   Provided buffers need not be initialized but should be suitably
@@ -464,7 +464,7 @@ main(void)
 	extern uint32_t bench_mul(void);
 	extern uint32_t bench_div(void);
 	extern uint32_t bench_sqrt(void);
-	extern uint32_t bench_keccak(uint64_t *A);
+	extern uint32_t bench_keccak(uint64_t *A, unsigned r);
 	extern uint32_t bench_NTT(unsigned logn, uint16_t *d);
 	extern uint32_t bench_iNTT(unsigned logn, uint16_t *d);
 	extern uint32_t bench_add_sub(void);
@@ -479,7 +479,22 @@ main(void)
 	prf("fpr_mul:      %5u\n", bench_mul() - cal);
 	prf("fpr_div:      %5u\n", bench_div() - cal);
 	prf("fpr_sqrt:     %5u\n", bench_sqrt() - cal);
-	prf("keccak:       %5u\n", bench_keccak(tmp_aligned) - cal);
+	prf("keccak:       %5u\n", bench_keccak(tmp_aligned, 17) - cal);
+
+	/* Bench SHAKE256 on 135-byte input and 136-byte output. */
+	{
+		uint8_t *buf1 = tmp_aligned;
+		uint8_t *buf2 = buf1 + 160;
+		shake_context *sc = (shake_context *)(buf2 + 160);
+		shake_init(sc, 256);
+		uint32_t begin = get_system_ticks();
+		shake_inject(sc, buf1, 135);
+		shake_flip(sc);
+		shake_extract(sc, buf2, 136);
+		uint32_t end = get_system_ticks();
+		prf("SHAKE256(135 -> 136): %5u\n", end - begin);
+	}
+
 	prf("NTT:          n=256: %6u   n=512: %6u   n=1024: %6u\n",
 		bench_NTT(8, tmp_aligned) - cal,
 		bench_NTT(9, tmp_aligned) - cal,

@@ -7,9 +7,14 @@
 /* Internal alias for the Keccak-f function. */
 #define process_block   fndsa_sha3_process_block
 
-/* Process the provided state. */
+/* Process the provided state.
+     A   pointer to state
+     r   number of data words (r = rate/8)
+   The implementation may use a different internal representation for the
+   non-data words, provided that the all-zero initial state is still all-zero
+   in that internal representation. */
 #if FNDSA_ASM_CORTEXM4
-void process_block(uint64_t *A);
+void process_block(uint64_t *A, unsigned r);
 #else
 /* Round constants. */
 static const uint64_t RC[] = {
@@ -27,7 +32,7 @@ static const uint64_t RC[] = {
 	0x0000000080000001, 0x8000000080008008
 };
 void
-process_block(uint64_t *A)
+process_block(uint64_t *A, unsigned r)
 {
 	uint64_t t0, t1, t2, t3, t4;
 	uint64_t tt0, tt1, tt2, tt3;
@@ -1297,7 +1302,7 @@ shake_inject(shake_context *sc, const void *in, size_t len)
 		buf += clen;
 		len -= clen;
 		if (dptr == rate) {
-			process_block(sc->A);
+			process_block(sc->A, rate >> 3);
 			dptr = 0;
 		}
 	}
@@ -1334,7 +1339,7 @@ shake_extract(shake_context *sc, void *out, size_t len)
 		size_t clen;
 
 		if (dptr == rate) {
-			process_block(sc->A);
+			process_block(sc->A, rate >> 3);
 			dptr = 0;
 		}
 		clen = rate - dptr;
@@ -1542,10 +1547,10 @@ shake256x4_refill(shake256x4_context *sc)
 	process_block_x2(sc->state + 2);
 	memcpy(sc->buf, sc->state, sizeof sc->buf);
 #else
-	process_block(sc->state);
-	process_block(sc->state + 25);
-	process_block(sc->state + 50);
-	process_block(sc->state + 75);
+	process_block(sc->state, 17);
+	process_block(sc->state + 25, 17);
+	process_block(sc->state + 50, 17);
+	process_block(sc->state + 75, 17);
 
 	/* Interleave the outputs into the buffer. */
 	for (int i = 0; i < 17; i ++) {
@@ -1587,7 +1592,7 @@ sha3_close(sha3_context *sc, void *out)
 	sc->A[v >> 3] ^= (uint64_t)0x80 << ((v & 7) << 3);
 
 	/* Process the padding block, then write the output. */
-	process_block(sc->A);
+	process_block(sc->A, sc->rate >> 3);
 	size_t len = (200 - sc->rate) >> 1;
 	uint8_t *buf = out;
 	for (size_t i = 0; i < len; i ++) {
