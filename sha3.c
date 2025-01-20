@@ -470,16 +470,6 @@ process_block_x4(uint64_t *A)
 		ya[i] = _mm256_loadu_si256((const __m256i *)A + i);
 	}
 
-	/* Invert some words (alternate internal representation, which
-	   saves some operations). */
-	__m256i yones = _mm256_set1_epi32(-1);
-	ya[ 1] = _mm256_xor_si256(ya[ 1], yones);
-	ya[ 2] = _mm256_xor_si256(ya[ 2], yones);
-	ya[ 8] = _mm256_xor_si256(ya[ 8], yones);
-	ya[12] = _mm256_xor_si256(ya[12], yones);
-	ya[17] = _mm256_xor_si256(ya[17], yones);
-	ya[20] = _mm256_xor_si256(ya[20], yones);
-
 	/*
 	 * Compute the 24 rounds. This loop is partially unrolled (each
 	 * iteration computes two rounds).
@@ -489,12 +479,7 @@ process_block_x4(uint64_t *A)
 
 #define yy_rotl(yv, nn)   _mm256_or_si256( \
 	_mm256_slli_epi64(yv, nn), _mm256_srli_epi64(yv, 64 - (nn)))
-#define yy_or(a, b)        _mm256_or_si256(a, b)
-#define yy_ornotL(a, b)    _mm256_or_si256(_mm256_xor_si256(a, yones), b)
-#define yy_ornotR(a, b)    _mm256_or_si256(a, _mm256_xor_si256(b, yones))
-#define yy_and(a, b)       _mm256_and_si256(a, b)
 #define yy_andnotL(a, b)   _mm256_andnot_si256(a, b)
-#define yy_andnotR(a, b)   _mm256_andnot_si256(b, a)
 #define yy_xor(a, b)       _mm256_xor_si256(a, b)
 
 #define yCOMB1(yd, i0, i1, i2, i3, i4, i5, i6, i7, i8, i9)   do { \
@@ -512,15 +497,15 @@ process_block_x4(uint64_t *A)
 
 #define yCOMB2(i0, i1, i2, i3, i4, op0, op1, op2, op3, op4)   do { \
 		__m256i yc0, yc1, yc2, yc3, yc4, ykt; \
-		ykt = yy_ ## op0(ya[i1], ya[i2]); \
+		ykt = yy_andnotL(ya[i1], ya[i2]); \
 		yc0 = yy_xor(ykt, ya[i0]); \
-		ykt = yy_ ## op1(ya[i2], ya[i3]); \
+		ykt = yy_andnotL(ya[i2], ya[i3]); \
 		yc1 = yy_xor(ykt, ya[i1]); \
-		ykt = yy_ ## op2(ya[i3], ya[i4]); \
+		ykt = yy_andnotL(ya[i3], ya[i4]); \
 		yc2 = yy_xor(ykt, ya[i2]); \
-		ykt = yy_ ## op3(ya[i4], ya[i0]); \
+		ykt = yy_andnotL(ya[i4], ya[i0]); \
 		yc3 = yy_xor(ykt, ya[i3]); \
-		ykt = yy_ ## op4(ya[i0], ya[i1]); \
+		ykt = yy_andnotL(ya[i0], ya[i1]); \
 		yc4 = yy_xor(ykt, ya[i4]); \
 		ya[i0] = yc0; \
 		ya[i1] = yc1; \
@@ -589,11 +574,8 @@ process_block_x4(uint64_t *A)
 
 		yCOMB2(0, 6, 12, 18, 24, or, ornotL, and, or, and);
 		yCOMB2(3, 9, 10, 16, 22, or, and, ornotR, or, and);
-		ya[19] = yy_xor(ya[19], yones);
 		yCOMB2(1, 7, 13, 19, 20, or, andnotR, and, or, and);
-		ya[17] = yy_xor(ya[17], yones);
 		yCOMB2(4, 5, 11, 17, 23, and, ornotR, or, and, or);
-		ya[8] = yy_xor(ya[8], yones);
 		yCOMB2(2, 8, 14, 15, 21, and, or, and, or, andnotR);
 
 		ya[0] = yy_xor(ya[0], _mm256_set1_epi64x(RC[j + 0]));
@@ -658,11 +640,8 @@ process_block_x4(uint64_t *A)
 
 		yCOMB2(0, 9, 13, 17, 21, or, ornotL, and, or, and);
 		yCOMB2(18, 22, 1, 5, 14, or, and, ornotR, or, and);
-		ya[23] = yy_xor(ya[23], yones);
 		yCOMB2(6, 10, 19, 23, 2, or, andnotR, and, or, and);
-		ya[11] = yy_xor(ya[11], yones);
 		yCOMB2(24, 3, 7, 11, 15, and, ornotR, or, and, or);
-		ya[16] = yy_xor(ya[16], yones);
 		yCOMB2(12, 16, 20, 4, 8, and, or, and, or, andnotR);
 
 		ya[0] = yy_xor(ya[0], _mm256_set1_epi64x(RC[j + 1]));
@@ -697,24 +676,11 @@ process_block_x4(uint64_t *A)
                 ya[ 7] = yt;
 
 #undef yy_rotl
-#undef yy_or
-#undef yy_ornotL
-#undef yy_ornotR
-#undef yy_and
 #undef yy_andnotL
-#undef yy_andnotR
 #undef yy_xor
 #undef yCOMB1
 #undef yCOMB2
 	}
-
-	/* Invert some words back to normal representation. */
-	ya[ 1] = _mm256_xor_si256(ya[ 1], yones);
-	ya[ 2] = _mm256_xor_si256(ya[ 2], yones);
-	ya[ 8] = _mm256_xor_si256(ya[ 8], yones);
-	ya[12] = _mm256_xor_si256(ya[12], yones);
-	ya[17] = _mm256_xor_si256(ya[17], yones);
-	ya[20] = _mm256_xor_si256(ya[20], yones);
 
 	/*
 	 * Write back state words.
@@ -740,16 +706,6 @@ process_block_x2(uint64_t *A)
 		xa[i] = _mm_loadu_si128((const __m128i *)A + (i << 1));
 	}
 
-	/* Invert some words (alternate internal representation, which
-	   saves some operations). */
-	__m128i xones = _mm_set1_epi32(-1);
-	xa[ 1] = _mm_xor_si128(xa[ 1], xones);
-	xa[ 2] = _mm_xor_si128(xa[ 2], xones);
-	xa[ 8] = _mm_xor_si128(xa[ 8], xones);
-	xa[12] = _mm_xor_si128(xa[12], xones);
-	xa[17] = _mm_xor_si128(xa[17], xones);
-	xa[20] = _mm_xor_si128(xa[20], xones);
-
 	/*
 	 * Compute the 24 rounds. This loop is partially unrolled (each
 	 * iteration computes two rounds).
@@ -759,12 +715,7 @@ process_block_x2(uint64_t *A)
 
 #define xx_rotl(xv, nn)   _mm_or_si128( \
 	_mm_slli_epi64(xv, nn), _mm_srli_epi64(xv, 64 - (nn)))
-#define xx_or(a, b)        _mm_or_si128(a, b)
-#define xx_ornotL(a, b)    _mm_or_si128(_mm_xor_si128(a, xones), b)
-#define xx_ornotR(a, b)    _mm_or_si128(a, _mm_xor_si128(b, xones))
-#define xx_and(a, b)       _mm_and_si128(a, b)
 #define xx_andnotL(a, b)   _mm_andnot_si128(a, b)
-#define xx_andnotR(a, b)   _mm_andnot_si128(b, a)
 #define xx_xor(a, b)       _mm_xor_si128(a, b)
 
 #define xCOMB1(xd, i0, i1, i2, i3, i4, i5, i6, i7, i8, i9)   do { \
@@ -782,15 +733,15 @@ process_block_x2(uint64_t *A)
 
 #define xCOMB2(i0, i1, i2, i3, i4, op0, op1, op2, op3, op4)   do { \
 		__m128i xc0, xc1, xc2, xc3, xc4, xkt; \
-		xkt = xx_ ## op0(xa[i1], xa[i2]); \
+		xkt = xx_andnotL(xa[i1], xa[i2]); \
 		xc0 = xx_xor(xkt, xa[i0]); \
-		xkt = xx_ ## op1(xa[i2], xa[i3]); \
+		xkt = xx_andnotL(xa[i2], xa[i3]); \
 		xc1 = xx_xor(xkt, xa[i1]); \
-		xkt = xx_ ## op2(xa[i3], xa[i4]); \
+		xkt = xx_andnotL(xa[i3], xa[i4]); \
 		xc2 = xx_xor(xkt, xa[i2]); \
-		xkt = xx_ ## op3(xa[i4], xa[i0]); \
+		xkt = xx_andnotL(xa[i4], xa[i0]); \
 		xc3 = xx_xor(xkt, xa[i3]); \
-		xkt = xx_ ## op4(xa[i0], xa[i1]); \
+		xkt = xx_andnotL(xa[i0], xa[i1]); \
 		xc4 = xx_xor(xkt, xa[i4]); \
 		xa[i0] = xc0; \
 		xa[i1] = xc1; \
@@ -859,11 +810,8 @@ process_block_x2(uint64_t *A)
 
 		xCOMB2(0, 6, 12, 18, 24, or, ornotL, and, or, and);
 		xCOMB2(3, 9, 10, 16, 22, or, and, ornotR, or, and);
-		xa[19] = xx_xor(xa[19], xones);
 		xCOMB2(1, 7, 13, 19, 20, or, andnotR, and, or, and);
-		xa[17] = xx_xor(xa[17], xones);
 		xCOMB2(4, 5, 11, 17, 23, and, ornotR, or, and, or);
-		xa[8] = xx_xor(xa[8], xones);
 		xCOMB2(2, 8, 14, 15, 21, and, or, and, or, andnotR);
 
 		xa[0] = xx_xor(xa[0], _mm_set1_epi64x(RC[j + 0]));
@@ -928,11 +876,8 @@ process_block_x2(uint64_t *A)
 
 		xCOMB2(0, 9, 13, 17, 21, or, ornotL, and, or, and);
 		xCOMB2(18, 22, 1, 5, 14, or, and, ornotR, or, and);
-		xa[23] = xx_xor(xa[23], xones);
 		xCOMB2(6, 10, 19, 23, 2, or, andnotR, and, or, and);
-		xa[11] = xx_xor(xa[11], xones);
 		xCOMB2(24, 3, 7, 11, 15, and, ornotR, or, and, or);
-		xa[16] = xx_xor(xa[16], xones);
 		xCOMB2(12, 16, 20, 4, 8, and, or, and, or, andnotR);
 
 		xa[0] = xx_xor(xa[0], _mm_set1_epi64x(RC[j + 1]));
@@ -977,14 +922,6 @@ process_block_x2(uint64_t *A)
 #undef xCOMB1
 #undef xCOMB2
 	}
-
-	/* Invert some words back to normal representation. */
-	xa[ 1] = _mm_xor_si128(xa[ 1], xones);
-	xa[ 2] = _mm_xor_si128(xa[ 2], xones);
-	xa[ 8] = _mm_xor_si128(xa[ 8], xones);
-	xa[12] = _mm_xor_si128(xa[12], xones);
-	xa[17] = _mm_xor_si128(xa[17], xones);
-	xa[20] = _mm_xor_si128(xa[20], xones);
 
 	/*
 	 * Write back state words.
