@@ -40,6 +40,8 @@ process_block(uint64_t *A, unsigned r)
 	uint64_t c0, c1, c2, c3, c4, bnn;
 	int j;
 
+	(void)r;
+
 	/* Invert some words (alternate internal representation, which
 	   saves some operations). */
 	A[ 1] = ~A[ 1];
