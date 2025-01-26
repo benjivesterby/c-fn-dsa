@@ -26,14 +26,9 @@ typedef struct {
 
 #define sampler_state   chacha20_sampler_state
 
-#define shake256x4_context   chacha20rng_context
-
-#undef shake256x4_init
-#undef shake256x4_next_u8
-#undef shake256x4_next_u64
-#define shake256x4_init       chacha20rng_init
-#define shake256x4_next_u8    chacha20rng_next_u8
-#define shake256x4_next_u64   chacha20rng_next_u64
+#define prng_init       chacha20rng_init
+#define prng_next_u8    chacha20rng_next_u8
+#define prng_next_u64   chacha20rng_next_u64
 
 static inline uint32_t
 dec32le(const void *src)

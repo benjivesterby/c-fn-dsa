@@ -86,12 +86,30 @@ static const uint32_t GAUSS0[][3] = {
 /* 1/log(2) */
 #define INV_LOG2   FPR(6497320848556798, -52)
 
+/* We access the PRNG through macros so that they can be overridden by some
+   compatiblity tests with the original Falcon implementation. */
+#ifndef prng_init
+#if FNDSA_SHAKE256X4
+#define prng_init       shake256x4_init
+#define prng_next_u8    shake256x4_next_u8
+#define prng_next_u64   shake256x4_next_u64
+#else
+#define prng_init(pc, seed, seed_len)   do { \
+		shake_init(pc, 256); \
+		shake_inject(pc, seed, seed_len); \
+		shake_flip(pc); \
+	} while (0)
+#define prng_next_u8    shake_next_u8
+#define prng_next_u64   shake_next_u64
+#endif
+#endif
+
 /* see sign_inner.h */
 void
 sampler_init(sampler_state *ss, unsigned logn,
 	const void *seed, size_t seed_len)
 {
-	shake256x4_init(&ss->pc, seed, seed_len);
+	prng_init(&ss->pc, seed, seed_len);
 	ss->logn = logn;
 }
 
@@ -103,8 +121,8 @@ static inline int32_t
 gaussian0(sampler_state *ss)
 {
 	/* Get a random 72-bit value, into three 24-bit limbs (v0..v2). */
-	uint64_t lo = shake256x4_next_u64(&ss->pc);
-	uint32_t hi = shake256x4_next_u8(&ss->pc);
+	uint64_t lo = prng_next_u64(&ss->pc);
+	uint32_t hi = prng_next_u8(&ss->pc);
 #if FNDSA_ASM_CORTEXM4
 	return fndsa_gaussian0_helper(lo, hi);
 #else
@@ -287,7 +305,7 @@ ber_exp(sampler_state *ss, __m128d x, __m128d ccs)
 	   is cryptographically strong, we leak no information from the
 	   conditional jumps below. */
 	for (int i = 56; i >= 0; i -= 8) {
-		unsigned w = shake256x4_next_u8(&ss->pc);
+		unsigned w = prng_next_u8(&ss->pc);
 		unsigned bz = (unsigned)(z >> i) & 0xFF;
 		if (w != bz) {
 			return w < bz;
@@ -328,7 +346,7 @@ sampler_next_sse2(sampler_state *ss, __m128d mu, __m128d isigma)
 		   bimodal distribution (we use z+1 if b = 1, or -z
 		   otherwise). */
 		int32_t z0 = gaussian0(ss);
-		int32_t b = shake256x4_next_u8(&ss->pc) & 1;
+		int32_t b = prng_next_u8(&ss->pc) & 1;
 		int32_t z = b + ((b << 1) - 1) * z0;
 
 		/* Rejection sampling. We want a Gaussian centred on r,
@@ -487,7 +505,7 @@ ber_exp(sampler_state *ss, float64x1_t x, float64x1_t ccs)
 	   is cryptographically strong, we leak no information from the
 	   conditional jumps below. */
 	for (int i = 56; i >= 0; i -= 8) {
-		unsigned w = shake256x4_next_u8(&ss->pc);
+		unsigned w = prng_next_u8(&ss->pc);
 		unsigned bz = (unsigned)(z >> i) & 0xFF;
 		if (w != bz) {
 			return w < bz;
@@ -520,7 +538,7 @@ sampler_next_neon(sampler_state *ss, float64x1_t mu, float64x1_t isigma)
 		   bimodal distribution (we use z+1 if b = 1, or -z
 		   otherwise). */
 		int32_t z0 = gaussian0(ss);
-		int32_t b = shake256x4_next_u8(&ss->pc) & 1;
+		int32_t b = prng_next_u8(&ss->pc) & 1;
 		int32_t z = b + ((b << 1) - 1) * z0;
 
 		/* Rejection sampling. We want a Gaussian centred on r,
@@ -660,7 +678,7 @@ ber_exp(sampler_state *ss, f64 x, f64 ccs)
 	   is cryptographically strong, we leak no information from the
 	   conditional jumps below. */
 	for (int i = 56; i >= 0; i -= 8) {
-		unsigned w = shake256x4_next_u8(&ss->pc);
+		unsigned w = prng_next_u8(&ss->pc);
 		unsigned bz = (unsigned)(z >> i) & 0xFF;
 		if (w != bz) {
 			return w < bz;
@@ -691,7 +709,7 @@ sampler_next_rv64d(sampler_state *ss, f64 mu, f64 isigma)
 		   bimodal distribution (we use z+1 if b = 1, or -z
 		   otherwise). */
 		int32_t z0 = gaussian0(ss);
-		int32_t b = shake256x4_next_u8(&ss->pc) & 1;
+		int32_t b = prng_next_u8(&ss->pc) & 1;
 		int32_t z = b + ((b << 1) - 1) * z0;
 
 		/* Rejection sampling. We want a Gaussian centred on r,
@@ -857,7 +875,7 @@ ber_exp(sampler_state *ss, fpr x, fpr ccs)
 	   is cryptographically strong, we leak no information from the
 	   conditional jumps below. */
 	for (int i = 56; i >= 0; i -= 8) {
-		unsigned w = shake256x4_next_u8(&ss->pc);
+		unsigned w = prng_next_u8(&ss->pc);
 		unsigned bz = (unsigned)(z >> i) & 0xFF;
 		if (w != bz) {
 			return w < bz;
@@ -887,7 +905,7 @@ sampler_next(sampler_state *ss, fpr mu, fpr isigma)
 		   bimodal distribution (we use z+1 if b = 1, or -z
 		   otherwise). */
 		int32_t z0 = gaussian0(ss);
-		int32_t b = shake256x4_next_u8(&ss->pc) & 1;
+		int32_t b = prng_next_u8(&ss->pc) & 1;
 		int32_t z = b + ((b << 1) - 1) * z0;
 
 		/* Rejection sampling. We want a Gaussian centred on r,

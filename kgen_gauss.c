@@ -31,8 +31,13 @@ static const uint16_t gauss_1024[] = {
 };
 
 /* see kgen_inner.h */
+#if FNDSA_SHAKE256X4
 void
 sample_f(unsigned logn, shake256x4_context *pc, int8_t *f)
+#else
+void
+sample_f(unsigned logn, shake_context *pc, int8_t *f)
+#endif
 {
 	const uint16_t *tab;
 	size_t tab_len;
@@ -71,7 +76,11 @@ sample_f(unsigned logn, shake256x4_context *pc, int8_t *f)
 			   but add multiple samples together. */
 			uint32_t v = 0;
 			for (unsigned t = 0; t < zz; t ++) {
+#if FNDSA_SHAKE256X4
 				uint32_t y = shake256x4_next_u16(pc);
+#else
+				uint32_t y = shake_next_u16(pc);
+#endif
 				v -= kmax;
 				for (size_t k = 0; k < tab_len; k ++) {
 					v -= ((uint32_t)tab[k] - y)

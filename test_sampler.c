@@ -22,17 +22,12 @@ typedef struct {
 
 #define sampler_state   test_sampler_state
 
-#define shake256x4_context   test_rng_context
-
-#undef shake256x4_init
-#undef shake256x4_next_u8
-#undef shake256x4_next_u64
-#define shake256x4_init       test_shake256x4_init
-#define shake256x4_next_u8    test_shake256x4_next_u8
-#define shake256x4_next_u64   test_shake256x4_next_u64
+#define prng_init       test_prng_init
+#define prng_next_u8    test_prng_next_u8
+#define prng_next_u64   test_prng_next_u64
 
 static void
-shake256x4_init(test_rng_context *pc, const void *seed, size_t seed_len)
+test_prng_init(test_rng_context *pc, const void *seed, size_t seed_len)
 {
 	pc->rndbuf = seed;
 	pc->ptr = 0;
@@ -40,7 +35,7 @@ shake256x4_init(test_rng_context *pc, const void *seed, size_t seed_len)
 }
 
 static inline uint8_t
-shake256x4_next_u8(test_rng_context *pc)
+test_prng_next_u8(test_rng_context *pc)
 {
 	if (pc->ptr >= pc->len) {
 		fprintf(stderr, "FAIL: too many random bytes requested\n");
@@ -50,11 +45,11 @@ shake256x4_next_u8(test_rng_context *pc)
 }
 
 static inline uint64_t
-shake256x4_next_u64(test_rng_context *pc)
+test_prng_next_u64(test_rng_context *pc)
 {
 	uint64_t x = 0;
 	for (int i = 0; i < 8; i ++) {
-		x = (x << 8) | (uint64_t)shake256x4_next_u8(pc);
+		x = (x << 8) | (uint64_t)test_prng_next_u8(pc);
 	}
 	return x;
 }

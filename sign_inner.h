@@ -598,7 +598,11 @@ void fpoly_apply_basis(unsigned logn, fpr *t0, fpr *t1,
  */
 
 typedef struct {
+#if FNDSA_SHAKE256X4
 	shake256x4_context pc;
+#else
+	shake_context pc;
+#endif
 	unsigned logn;
 } sampler_state;
 

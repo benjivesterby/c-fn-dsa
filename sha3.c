@@ -1309,6 +1309,7 @@ shake_extract(shake_context *sc, void *out, size_t len)
 	sc->dptr = (unsigned)dptr;
 }
 
+#if FNDSA_SHAKE256X4
 /* Little-endian 64-bit decoding. */
 static inline uint64_t
 dec64le(const void *src)
@@ -1500,6 +1501,7 @@ shake256x4_refill(shake256x4_context *sc)
 	}
 #endif
 }
+#endif
 
 /* SHA-3 is mostly the same as SHAKE, except for the padding, and the
    fact that the output size is fixed. */

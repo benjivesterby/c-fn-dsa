@@ -8,6 +8,8 @@
 #   -DFNDSA_DIV_EMU=1      force integer emulation of divisions (RISC-V only)
 #   -DFNDSA_SQRT_EMU=1     force integer emulation of square roots (RISC-V only)
 #
+#   -DFNDSA_SHAKE256X4=1   use four parallel SHAKE256 as internal PRNG
+#
 # AVX2 support is compiled on x86 and x86_64 but is gated at runtime
 # with a check that AVX2 is supported by the current CPU (and not
 # disabled by the operating system); if AVX2 cannot be used, then the
@@ -40,6 +42,21 @@
 # instructions are used, the divisions and square roots may optionally
 # be done with only integer computations, which is slower but possibly
 # safer with regard to timing attacks.
+#
+# An internal PRNG is used during key pair generation (to generate
+# candidate (f,g) polynomial pairs) and during signature generation (to
+# power the Gaussian sampling). By default, that PRNG is a simple
+# SHAKE256. An alternate PRNG is enabled by setting
+# '-DFNDSA_SHAKE256X4=1': this new PRNG uses four SHAKE256 in parallel,
+# with interleaved outputs. The alternate PRNG speeds up signature
+# generation by about 20% when runing on an x86 CPU with AVX2 support;
+# however, it also increases stack usage by aout 1.1 kB, which can be a
+# problem on small embedded systems such as microcontrollers, which is
+# why it is not the default. Moreover, using the alternate PRNG
+# necessarily changes the keys and signatures obtained from a given seed
+# (note that reproducibility of keys and signatures should not be relied
+# upon, at least until the FN-DSA standard is finalized, as things are
+# expected to change again in some areas).
 #
 # By default, this code compiles 'test_fndsa' (a test framework to validate
 # that all computations are correct) and 'speed_fndsa' (speed benchmarks).

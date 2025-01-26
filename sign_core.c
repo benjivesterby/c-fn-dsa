@@ -69,6 +69,11 @@ sign_core(unsigned logn,
 	uint8_t *nonce = rndbuf;
 	uint8_t *subseed = rndbuf + 40;
 
+	/* TODO: add "hedging" by hashing together the private key, the
+	   message and the seed, to get a new seed value (protection against
+	   bad RNG). We don't need to use the complete private key; we can
+	   use F. */
+
 	for (uint32_t counter = 0;; counter ++) {
 		/* Generate the nonce and the sub-seed. In the original
 		   Falcon, the nonce was not regenerated in case of

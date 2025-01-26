@@ -1085,10 +1085,17 @@ int avx2_check_ortho_norm(unsigned logn,
  * (f,g) sampling (Gaussian distribution).
  */
 
+#if FNDSA_SHAKE256X4
 /* Sample f (or g) from the provided SHAKE256x4 PRNG. This function
    ensures that the sampled polynomial has odd parity. */
 #define sample_f   fndsa_sample_f
 void sample_f(unsigned logn, shake256x4_context *pc, int8_t *f);
+#else
+/* Sample f (or g) from the provided SHAKE-based PRNG. This function
+   ensures that the sampled polynomial has odd parity. */
+#define sample_f   fndsa_sample_f
+void sample_f(unsigned logn, shake_context *pc, int8_t *f);
+#endif
 
 /* ==================================================================== */
 

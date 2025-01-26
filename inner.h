@@ -199,6 +199,44 @@
 #endif
 #endif
 
+/* Recognize little-endian architectures. A little-endian system can
+   extract bytes from a SHAKE context more efficiently. If
+   FNDSA_LITTLE_ENDIAN is 0, then the platform is not assumed to be
+   little-endian (but it still can be). */
+#ifndef FNDSA_LITTLE_ENDIAN
+#if defined __LITTLE_ENDIAN__ \
+	|| (defined __BYTE_ORDER__ && defined __ORDER_LITTLE_ENDIAN__ \
+		&& __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) \
+	|| defined _M_IX86 || defined _M_X64 || defined _M_ARM64
+#define FNDSA_LITTLE_ENDIAN   1
+#else
+#define FNDSA_LITTLE_ENDIAN   0
+#endif
+#endif
+
+/* Some architectures tolerate well unaligned accesses to 64-bit words. */
+#ifndef FNDSA_UNALIGNED_64
+#if defined __x86_64__ || defined _M_X64 \
+	|| defined __i386__ || defined _M_IX86 \
+	|| defined __aarch64__ || defined _M_ARM64
+#define FNDSA_UNALIGNED_64   1
+#else
+#define FNDSA_UNALIGNED_64   0
+#endif
+#endif
+
+/* Some architectures tolerate well unaligned accesses to 16-bit words. */
+#ifndef FNDSA_UNALIGNED_16
+#if defined __x86_64__ || defined _M_X64 \
+	|| defined __i386__ || defined _M_IX86 \
+	|| FNDSA_ASM_CORTEXM4 \
+	|| defined __aarch64__ || defined _M_ARM64
+#define FNDSA_UNALIGNED_16   1
+#else
+#define FNDSA_UNALIGNED_16   0
+#endif
+#endif
+
 /* Some MSVC adjustments. */
 #if defined _MSC_VER
 /* Disable some warnings which are about valid and well-defined operations
@@ -254,6 +292,107 @@ void shake_flip(shake_context *sc);
    RAM (especially stack space) on embedded systems. */
 void shake_extract(shake_context *sc, void *out, size_t len);
 
+/* Get the next byte from a SHAKE context. */
+static inline uint8_t
+shake_next_u8(shake_context *sc)
+{
+	if (sc->dptr == sc->rate) {
+		uint8_t x;
+		shake_extract(sc, &x, 1);
+		return x;
+	}
+#if FNDSA_LITTLE_ENDIAN
+	uint8_t *d = (uint8_t *)(void *)sc;
+	return d[sc->dptr ++];
+#else
+	uint8_t x = (uint8_t)(sc->A[sc->dptr >> 3] >> ((sc->dptr & 7) << 3));
+	sc->dptr ++;
+	return x;
+#endif
+}
+
+/* Get the next 16-bit word from SHAKE. */
+static inline unsigned
+shake_next_u16(shake_context *sc)
+{
+	if (sc->dptr + 1 >= sc->rate) {
+		uint8_t x[2];
+		shake_extract(sc, x, 2);
+		return (unsigned)x[0] | ((unsigned)x[1] << 8);
+	}
+#if FNDSA_LITTLE_ENDIAN
+	uint8_t *d = (uint8_t *)(void *)sc;
+#if FNDSA_UNALIGNED_16
+	unsigned v = *(uint16_t *)(d + sc->dptr);
+#else
+	unsigned v = (unsigned)d[sc->dptr] | ((unsigned)d[sc->dptr + 1] << 8);
+#endif
+	sc->dptr += 2;
+	return v;
+#else
+	unsigned x0 = (uint8_t)(sc->A[sc->dptr >> 3] >> ((sc->dptr & 7) << 3));
+	sc->dptr ++;
+	unsigned x1 = (uint8_t)(sc->A[sc->dptr >> 3] >> ((sc->dptr & 7) << 3));
+	sc->dptr ++;
+	return x0 | (x1 << 8);
+#endif
+}
+
+/* Get the next 64-bit word from SHAKE. */
+static inline uint64_t
+shake_next_u64(shake_context *sc)
+{
+	if ((sc->dptr + 7) >= sc->rate) {
+#if FNDSA_LITTLE_ENDIAN
+		uint64_t v;
+		shake_extract(sc, &v, 8);
+		return v;
+#else
+		uint8_t x[8];
+		shake_extract(sc, x, 8);
+		return (uint64_t)x[0]
+			| ((uint64_t)x[1] << 8)
+			| ((uint64_t)x[2] << 16)
+			| ((uint64_t)x[3] << 24)
+			| ((uint64_t)x[4] << 32)
+			| ((uint64_t)x[5] << 40)
+			| ((uint64_t)x[6] << 48)
+			| ((uint64_t)x[7] << 56);
+#endif
+	}
+	uint64_t x;
+#if FNDSA_LITTLE_ENDIAN && FNDSA_UNALIGNED_64
+	x = *(uint64_t *)((uint8_t *)(void *)sc + sc->dptr);
+#else
+	size_t j = sc->dptr >> 3;
+	unsigned n = sc->dptr & 7;
+	if (n == 0) {
+		x = sc->A[j];
+	} else {
+		x = sc->A[j] >> (n << 3);
+		x |= sc->A[j + 1] << (64 - (n << 3));
+	}
+#endif
+	sc->dptr += 8;
+	return x;
+}
+
+/* By default, we use a simple SHAKE256 for internal PRNG needs
+   (in keygen to generate (f,g), in signing for the Gaussian sampling).
+   If FNDSA_SHAKE256X4 is non-zero, then SHAKE256x4 is used: it is a
+   PRNG consisting of four SHAKE256 running in parallel, with interleaved
+   outputs. This has two main effects:
+     - On x86 with AVX2 support, this makes signing faster (by about 20%).
+     - It increases stack usage by about 1.1 kB, which can be a concern
+       for small embedded systems (e.g. ARM Cortex-M4).
+   It otherwise has no real perceivable effect, except that (of course)
+   it changes the exact key pairs and signature values obtained from a
+   given seed. */
+#ifndef FNDSA_SHAKE256X4
+#define FNDSA_SHAKE256X4   0
+#endif
+
+#if FNDSA_SHAKE256X4
 /*
  * SHAKE256x4 is a PRNG based on SHAKE256; it runs four SHAKE256 instances
  * in parallel, interleaving their outputs with 64-bit granularity. The
@@ -319,6 +458,7 @@ shake256x4_next_u64(shake256x4_context *sc)
 	sc->ptr += 8;
 	return x;
 }
+#endif
 
 /*
  * SHA-3 implementation.

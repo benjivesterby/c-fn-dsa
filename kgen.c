@@ -17,8 +17,15 @@ keygen_inner(unsigned logn, const void *seed, size_t seed_len,
 	int8_t *g = f + n;
 
 	/* Make a PRNG with the provided seed. */
+#if FNDSA_SHAKE256X4
 	shake256x4_context pc;
 	shake256x4_init(&pc, seed, seed_len);
+#else
+	shake_context pc;
+	shake_init(&pc, 256);
+	shake_inject(&pc, seed, seed_len);
+	shake_flip(&pc);
+#endif
 
 	for (;;) {
 		/* Sample f and g, both with odd parity. */
@@ -103,8 +110,15 @@ avx2_keygen_inner(unsigned logn, const void *seed, size_t seed_len,
 	int8_t *g = f + n;
 
 	/* Make a PRNG with the provided seed. */
+#if FNDSA_SHAKE256X4
 	shake256x4_context pc;
 	shake256x4_init(&pc, seed, seed_len);
+#else
+	shake_context pc;
+	shake_init(&pc, 256);
+	shake_inject(&pc, seed, seed_len);
+	shake_flip(&pc);
+#endif
 
 	for (;;) {
 		/* Sample f and g, both with odd parity. */
