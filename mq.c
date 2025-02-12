@@ -335,12 +335,14 @@ mqpoly_int_to_small(unsigned logn, const uint16_t *d, int8_t *f)
 	uint32_t ov = 0;
 	for (size_t i = 0; i < n; i ++) {
 		/* We add 128. If the value is in-range, we get an integer
-		   in [1,255]; otherwise, we get an integer in [256,q].
-		   Note that this works for both representations of zero
-		   (0 and q) if we are using a relaxed internal
-		   representation. */
+		   in [1,255]; otherwise, we get an integer in [256,q]. */
 		uint32_t x = mq_add(d[i], 128);
 		ov |= x;
+#if FNDSA_ASM_CORTEXM4
+		/* In the relaxed representation, we must also reject a
+		   zero here. */
+		ov |= x - 1;
+#endif
 		x -= 128;
 		f[i] = (int8_t)*(int32_t *)&x;
 	}
