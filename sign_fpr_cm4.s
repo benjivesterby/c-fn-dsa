@@ -23,18 +23,17 @@ fndsa_fpr_scaled:
 	sbc	r5, r5, r1, asr #31
 
 	@ Count leading zeros of r0:r5 (into r3).
-	@ r12 = 1 if r3 >= 32, 0 otherwise.
+	@ r12 = -1 if r3 >= 32, 0 otherwise.
 	clz	r3, r5
 	clz	r4, r0
-	lsrs	r12, r3, #5
-	umlal	r3, r4, r4, r12
+	sbfx	r12, r3, #5, #1
+	mls	r3, r4, r12, r3
 
 	@ Normalize absolute value to [2^63,2^64-1]: we shift-left the value
 	@ by r3 bits. We also adjust the scaling (sc, in r2) accordingly.
 	subs	r2, r2, r3
 
-	@ At this point, r12 = 1 if r3 >= 32, 0 otherwise.
-	rsbs	r12, #0           @ r1 <- -1 if r12 = 1, 0 otherwise
+	@ At this point, r12 = -1 if r3 >= 32, 0 otherwise.
 	umlal	r0, r5, r0, r12   @ if r5 = 0 then r0:r5 <- 0:r0
 	and	r12, r3, #31
 	movs	r4, #1
@@ -744,7 +743,7 @@ fndsa_fpr_div:
 	.endif
 	@ Subtract the dividend conditionally on the quotient bit.
 	umlal	r0, r1, r7, r11
-	umlal	r1, r11, r8, r11
+	mla	r1, r8, r11, r1
 .endm
 
 	@ Four successive division steps.
