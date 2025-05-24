@@ -217,7 +217,7 @@ fpr_sub(fpr x, fpr y)
 			  "+r" (t_add_sub_y0), "+r" (t_add_sub_y1) \
 			: \
 			: "r4", "r5", "r6", "r7", "r8", \
-			  "r10", "r11", "r12", "r14", "s15", "cc"); \
+			  "r10", "r11", "r12", "r14", "cc"); \
 		(a) = (uint64_t)t_add_sub_x0 | ((uint64_t)t_add_sub_x1 << 32); \
 		(b) = (uint64_t)t_add_sub_y0 | ((uint64_t)t_add_sub_y1 << 32); \
 	} while (0)

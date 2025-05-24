@@ -128,16 +128,14 @@ fndsa_fpr_add:
 	@ or minus zero (we do not support subnormals).
 	asrs	r5, r7, #31        @ Sign bit (extended to whole word)
 	ubfx	r4, r7, #20, #11   @ Exponent in r4 (without sign)
-	addw	r1, r4, #2047      @ r1 >= 2048 if and only if r4 != 0
-	lsrs	r1, r1, #11        @ r1 = 1 except if r4 = 0
+	usat	r1, #1, r4         @ r1 = 1 except if r4 = 0
 	bfi	r7, r1, #20, #12   @ Set high mantissa bits
 
 	@ Extract mantissa of y into r2:r3, exponent in r0.
 	@ Low bit of r5 receives the xor of the signs of x and y.
 	eor	r5, r5, r3, lsr #31
 	ubfx	r0, r3, #20, #11   @ Exponent in r0 (without sign)
-	addw	r1, r0, #2047      @ r1 >= 2048 if and only if r0 != 0
-	lsrs	r1, r1, #11        @ r1 = 1 except if r0 = 0
+	usat	r1, #1, r0         @ r1 = 1 except if r0 = 0
 	bfi	r3, r1, #20, #12   @ Set high mantissa bits
 
 	@ Scale mantissas up by three bits (i.e. multiply both by 8).
@@ -152,16 +150,16 @@ fndsa_fpr_add:
 
 	@ At that point, the exponent of x (in r4) is larger than that
 	@ of y (in r0). The difference is the amount of shifting that
-	@ should be done on y. If that amount is larger than 59 then
-	@ we clamp y to 0. We won't need y's exponent beyond that point,
-	@ so we store that shift count in r0.
+	@ should be done on y. We saturate the shift amount at 63: since
+	@ the scaled y mantissa fits on 56 bits, the shifted value would
+	@ be zero anyway.
+	@ We won't need y's exponent beyond that point, so we store that
+	@ shift count in r0.
 	subs	r0, r4, r0
-	subs	r1, r0, #60
-	ands	r2, r2, r1, asr #31
-	ands	r3, r3, r1, asr #31
+	usat	r0, #6, r0
 
 	@ Shift right r2:r3 by r0 bits (with result in r3:r0). The
-	@ shift count is in the 0..59 range. r12 will be non-zero if and
+	@ shift count is in the 0..63 range. r12 will be non-zero if and
 	@ only if some non-zero bits were dropped.
 
 	@ If r0 >= 32, then right-shift by 32 bits; r12 is set to the
@@ -181,7 +179,7 @@ fndsa_fpr_add:
 	orr	r12, r12, r2
 
 	@ If r12 is non-zero then some non-zero bit was dropped and the
-	@ low bit of r2 must be forced to 1 ('sticky bit').
+	@ low bit of r3 must be forced to 1 ('sticky bit').
 	rsbs	r2, r12, #0
 	orrs	r2, r2, r12
 	orrs	r3, r3, r2, lsr #31
@@ -273,7 +271,7 @@ fndsa_fpr_add:
 @ This does not follow the AAPCS, hence the caller must be custom (inline)
 @ assembly that specifies clobbers and dispatches the two results
 @ appropriately.
-@ Clobbers: r4, r5, r6, r7, r8, r10, r11, r12, r14, s15, flags
+@ Clobbers: r4, r5, r6, r7, r8, r10, r11, r12, r14, flags
 @ =======================================================================
 
 	.align	2
@@ -345,16 +343,14 @@ fndsa_fpr_add_sub:
 	@ or minus zero (we do not support subnormals).
 	asrs	r5, r7, #31        @ Sign bit (extended to whole word)
 	ubfx	r4, r7, #20, #11   @ Exponent in r4 (without sign)
-	addw	r8, r4, #2047      @ r8 >= 2048 if and only if r4 != 0
-	lsrs	r8, r8, #11        @ r8 = 1 except if r4 = 0
+	usat	r8, #1, r4         @ r8 = 1 except if r4 = 0
 	bfi	r7, r8, #20, #12   @ Set high mantissa bits
 
 	@ Extract mantissa of y into r2:r3, exponent in r0.
 	@ r1 receives the xor of the signs of x and y (extended).
 	eor	r1, r5, r3, asr #31
 	ubfx	r0, r3, #20, #11   @ Exponent in r0 (without sign)
-	addw	r8, r0, #2047      @ r8 >= 2048 if and only if r0 != 0
-	lsrs	r8, r8, #11        @ r8 = 1 except if r0 = 0
+	usat	r8, #1, r0         @ r8 = 1 except if r0 = 0
 	bfi	r3, r8, #20, #12   @ Set high mantissa bits
 
 	@ Scale mantissas up by three bits (i.e. multiply both by 8).
@@ -364,21 +360,30 @@ fndsa_fpr_add_sub:
 	lsls	r3, #3
 	umlal	r2, r3, r2, r8
 
-	@ x: exponent=r4, sign=r5, mantissa=r6:r7 (scaled up 3 bits)
+	@ Prepare signs for the two results.
+	@   r5[0..29] = 0
+	@   r5[30] = sign of first result
+	@   r5[31] = sign of second result
+	@ First result as the sign of x. Second result has the sign of x,
+	@ but reversed if a swap occurred (r11 = -1).
+	eor	r5, r5, r11, lsl #31
+	and	r5, r5, #0xC0000000
+
+	@ x: exponent=r4, sign=r5[30], mantissa=r6:r7 (scaled up 3 bits)
 	@ y: exponent=r0, sign-xor=r1, mantissa=r2:r3 (scaled up 3 bits)
 
 	@ At that point, the exponent of x (in r4) is larger than that
 	@ of y (in r0). The difference is the amount of shifting that
-	@ should be done on y. If that amount is larger than 59 then
-	@ we clamp y to 0. We won't need y's exponent beyond that point,
-	@ so we store that shift count in r0.
+	@ should be done on y. We saturate the shift amount at 63: since
+	@ the scaled y mantissa fits on 56 bits, the shifted value would
+	@ be zero anyway.
+	@ We won't need y's exponent beyond that point, so we store that
+	@ shift count in r0.
 	subs	r0, r4, r0
-	subs	r8, r0, #60
-	ands	r2, r2, r8, asr #31
-	ands	r3, r3, r8, asr #31
+	usat	r0, #6, r0
 
 	@ Shift right r2:r3 by r0 bits (with result in r3:r0). The
-	@ shift count is in the 0..59 range. r12 will be non-zero if and
+	@ shift count is in the 0..63 range. r12 will be non-zero if and
 	@ only if some non-zero bits were dropped.
 
 	@ If r0 >= 32, then right-shift by 32 bits; r12 is set to the
@@ -403,7 +408,7 @@ fndsa_fpr_add_sub:
 	orrs	r2, r2, r12
 	orrs	r3, r3, r2, lsr #31
 
-	@ x: exponent=r4, sign=r5, mantissa=r6:r7 (scaled up 3 bits)
+	@ x: exponent=r4, sign=r5[30], mantissa=r6:r7 (scaled up 3 bits)
 	@ y: sign-xor=r1, value=r3:r0 (scaled to same exponent as x)
 
 	@ Compute the sum (into r6:r7) and the difference (into r12:r8).
@@ -412,20 +417,17 @@ fndsa_fpr_add_sub:
 	adds	r6, r6, r3
 	adcs	r7, r7, r0
 
-	@ Swap the values if r1 = -1. Second output goes to: r10:r12
+	@ Swap the values if r1 = -1. Second output goes to: r10:r11
 	uadd8	r10, r1, r1
 	sel	r10, r6, r12
 	sel	r6, r12, r6
-	sel	r12, r7, r8
+	sel	r11, r7, r8
 	sel	r7, r8, r7
-
-	@ Save high word of second output (low word is kept in r10).
-	vmov	s15, r12
 
 	@ Post-processing for first output
 	@ --------------------------------
 
-	@ result: exponent=r4, sign=r5, mantissa=r6:r7 (scaled up 3 bits)
+	@ result: exponent=r4, sign=r5[30], mantissa=r6:r7 (scaled up 3 bits)
 	@ Value in r6:r7 is necessarily less than 2^57.
 
 	@ Normalize the result with some left-shifting to full 64-bit
@@ -475,8 +477,8 @@ fndsa_fpr_add_sub:
 	@   - b4 = 1 and b3:b2:b1:b0 >= 1000
 	@ Equivalently, we must add +1 after the shift if and only if:
 	@   b3:b2:b1:b0:b4 + 01111 >= 100000
-	lsls	r5, #31              @ sign of output is sign of x
-	orr	r1, r5, r8, lsl #20  @ exponent and sign
+	lsls	r1, r5, #1           @ sign of output is sign of x
+	bfi	r1, r8, #20, #11     @ inject exponent
 	lsls	r3, r6, #21          @ top(r3) = b3:b2:b1:b0:00...
 	lsrs	r0, r6, #11
 	bfi	r3, r0, #27, #1      @ top(r3) = b3:b2:b1:b0:b4:00...
@@ -491,29 +493,28 @@ fndsa_fpr_add_sub:
 	@ Post-processing for second output
 	@ ---------------------------------
 
-	@ Unprocessed second output is in r10:s15
-	vmov	r7, s15
+	@ Unprocessed second output is in r10:r11
 
-	@ result: exponent=r4, sign=r5 (top), mantissa=r10:r7 (scaled up 3 bits)
-	@ Value in r10:r7 is necessarily less than 2^57.
+	@ result: exponent=r4, sign=r5[31], mantissa=r10:r11 (scaled up 3 bits)
+	@ Value in r10:r11 is necessarily less than 2^57.
 
 	@ Normalize the result with some left-shifting to full 64-bit
 	@ width. Shift count goes to r2, and exponent (r4) is adjusted.
-	clz	r2, r7
+	clz	r2, r11
 	clz	r3, r10
 	sbfx	r8, r2, #5, #1
 	umlal	r3, r2, r3, r8
 	subs	r4, r4, r2
 
-	@ Shift r10:r7 to the left by r2 bits (into r6:r12)
-	@ If r2 >= 32, then r7 = 0 and r8 = -1, and we set: r10:r7 <- 0:r10
-	umlal	r10, r7, r10, r8
+	@ Shift r10:r11 to the left by r2 bits (into r6:r12)
+	@ If r2 >= 32, then r11 = 0 and r8 = -1, and we set: r10:r11 <- 0:r10
+	umlal	r10, r11, r10, r8
 	@ Left-shift by r2 mod 32
 	and	r2, #31
 	movw	r8, #1
 	lsl	r8, r2
 	umull	r6, r12, r10, r8
-	umlal	r12, r7, r7, r8
+	umlal	r12, r11, r11, r8
 
 	@ Normalized mantissa is now in r6:r12
 	@ Since the mantissa was at most 57-bit pre-normalization, the low
@@ -543,19 +544,13 @@ fndsa_fpr_add_sub:
 	@   - b4 = 1 and b3:b2:b1:b0 >= 1000
 	@ Equivalently, we must add +1 after the shift if and only if:
 	@   b3:b2:b1:b0:b4 + 01111 >= 100000
-	orr	r7, r5, r4, lsl #20  @ exponent and sign
+	bfi	r5, r4, #20, #11
 	lsls	r3, r6, #21          @ top(r3) = b3:b2:b1:b0:00...
 	lsr	r8, r6, #11
 	bfi	r3, r8, #27, #1      @ top(r3) = b3:b2:b1:b0:b4:00...
 	adds	r3, r3, #0x78000000  @ add 01111 to top bits, carry is adjust
 	adcs	r2, r8, r12, lsl #21
-	adcs	r3, r7, r12, lsr #11
-
-	@ If there was an operand swap, then we should reverse the sign
-	@ of the second result here. As described previsouly, this also
-	@ correctly handles situations involving zeros.
-	@ Swap flag (-1 or 0) is still in r11.
-	eor	r3, r3, r11, lsl #31
+	adcs	r3, r5, r12, lsr #11
 
 	bx	lr
 	.size	fndsa_fpr_add_sub,.-fndsa_fpr_add_sub
@@ -596,15 +591,12 @@ fndsa_fpr_mul:
 	@    the mantissas is zero and leads to a zero product.
 	@  - We will want to keep the sign bit.
 	@ Otherwise:
-	@  - We can assume that both exponents are greater than 1 (we never
-	@    get that close to underflow throughout the algorithm).
-	@    -> thus: r6 - r6*r12 = r6*(1 - r12) is negative
 	@  - We must set both implicit mantissa bits to 1.
-	mls	r6, r6, r12, r6
-	asrs	r6, r6, #31
-	ands	r3, r3, r6
-	sub	r4, r4, r6, lsl #20
-	sub	r5, r5, r6, lsl #20
+	mul	r6, r6, r12
+	usat	r6, #1, r6
+	muls	r3, r6
+	orr	r4, r4, r6, lsl #20
+	orr	r5, r5, r6, lsl #20
 
 	@ Plug the aggregate exponent into r1.
 	add	r1, r1, r3, lsl #20
