@@ -16,15 +16,15 @@ fndsa_fpr_scaled:
 	@push	{ r4, r5 }
 	vmov	s0, s1, r4, r5
 
-	@ Get absolute value into r0:r5.
-	eor	r0, r0, r1, asr #31
-	eor	r5, r1, r1, asr #31
-	subs	r0, r0, r1, asr #31
-	sbc	r5, r5, r1, asr #31
+	@ Get sign into r5 (0 or -1) and absolute value into r0:r1
+	asrs	r5, r1, #31
+	eors	r0, r5
+	eors	r1, r5
+	smlal	r0, r1, r5, r5
 
-	@ Count leading zeros of r0:r5 (into r3).
+	@ Count leading zeros of r0:r1 (into r3).
 	@ r12 = -1 if r3 >= 32, 0 otherwise.
-	clz	r3, r5
+	clz	r3, r1
 	clz	r4, r0
 	sbfx	r12, r3, #5, #1
 	mls	r3, r4, r12, r3
@@ -34,12 +34,12 @@ fndsa_fpr_scaled:
 	subs	r2, r2, r3
 
 	@ At this point, r12 = -1 if r3 >= 32, 0 otherwise.
-	umlal	r0, r5, r0, r12   @ if r5 = 0 then r0:r5 <- 0:r0
+	umlal	r0, r1, r0, r12   @ if r1 = 0 then r0:r1 <- 0:r0
 	and	r12, r3, #31
 	movs	r4, #1
 	lsls	r4, r12
 	umull	r0, r12, r0, r4
-	umlal	r12, r4, r5, r4
+	umlal	r12, r4, r1, r4
 
 	@ Normalized absolute value is now in r0:r12.
 	@ If the source integer was zero, then r0:r12 = 0 at this point.
@@ -50,6 +50,10 @@ fndsa_fpr_scaled:
 	@ exponent.
 	addw	r2, r2, #1085
 
+	@ If source was non-zero, then msb(r12) = 1. We can thus use msb(r12)
+	@ to clear the exponent if the value is zero.
+	and	r2, r2, r12, asr #31
+
 	@ Shrink mantissa to [2^52,2^53-1] with rounding.
 	@ See fpr_add() for details. Since we can only guarantee that the
 	@ lowest bit is 0, the method involves adding 0x7FE00000, which
@@ -59,20 +63,13 @@ fndsa_fpr_scaled:
 	lsls	r4, r0, #21
 	lsrs	r0, r0, #11
 	bfi	r4, r0, #21, #1
-	movw	r5, #0x7FE0
-	adds	r4, r4, r5, lsl #16
+	movw	r1, #0x7FE0
+	adds	r4, r4, r1, lsl #16
 	adcs	r0, r0, r12, lsl #21
-	adcs	r12, r2, r12, lsr #11
-
-	@ If the source value was zero then the mantissa is still zero,
-	@ but the exponent field is wrong and must be adjusted. We still
-	@ have the count of leading zeros in r3; source was 0 if and only
-	@ if r3 = 64.
-	sbfx	r3, r3, #6, #1
-	bics	r12, r3
+	adcs	r1, r2, r12, lsr #11
 
 	@ Insert back the sign.
-	bfi	r1, r12, #0, #31
+	bfi	r1, r5, #31, #1
 
 	@pop	{ r4, r5 }
 	vmov	r4, r5, s0, s1
