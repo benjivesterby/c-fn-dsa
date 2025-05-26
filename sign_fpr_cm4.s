@@ -575,20 +575,16 @@ fndsa_fpr_mul:
 	vmov	s0, s1, r4, r5
 	vmov	s2, r6
 
-	@ Extract mantissas into r0:r4 and r2:r5 (implicit bits not set yet).
-	ubfx	r4, r1, #0, #20
-	ubfx	r5, r3, #0, #20
-
 	@ Get exponents into r6 and r12.
 	ubfx	r6, r1, #20, #11
 	ubfx	r12, r3, #20, #11
 
-	@ Compute sign bit (into top of r1, other bits ignored).
-	eors	r1, r3
+	@ Compute sign bit (into top of r5, other bits ignored).
+	eor	r5, r1, r3
 
-	@ Compute aggregate exponent (into r3).
-	adds	r3, r6, r12
-	sub	r3, r3, #1024
+	@ Compute aggregate exponent (into r4).
+	adds	r4, r6, r12
+	sub	r4, r4, #1024
 
 	@ If either exponent is zero, then:
 	@  - The corresponding value is zero, and the result will be zero.
@@ -597,70 +593,70 @@ fndsa_fpr_mul:
 	@  - We will want to keep the sign bit.
 	@ Otherwise:
 	@  - We must set both implicit mantissa bits to 1.
-	mul	r6, r6, r12
-	usat	r6, #1, r6
-	muls	r3, r6
-	orr	r4, r4, r6, lsl #20
-	orr	r5, r5, r6, lsl #20
+	mul	r6, r6, r12       @ r6 != 0 iff both exponents are non-zero
+	usat	r6, #1, r6        @ r6 = 0 or 1
+	muls	r4, r6
+	bfi	r1, r6, #20, #12  @ set implicit bit and clear exponent/sign
+	bfi	r3, r6, #20, #12  @ set implicit bit and clear exponent/sign
 
-	@ Plug the aggregate exponent into r1.
-	bfi	r1, r3, #20, #11
+	@ Plug the aggregate exponent into r5.
+	bfi	r5, r4, #20, #11
 
 	@ At this point:
-	@   r0:r4   first mantissa (completed)
-	@   r2:r5   second mantissa (completed)
-	@   r1      output sign and exponent
+	@   r0:r1   first mantissa (completed)
+	@   r2:r3   second mantissa (completed)
+	@   r5      output sign and exponent
 	@ Other registers are free.
 
-	@ Compute mantissa product into r6:r12:r3:r0.
+	@ Compute mantissa product into r6:r12:r4:r0.
 	umull	r6, r12, r0, r2
-	umull	r3, r0, r0, r5
-	umaal	r12, r3, r4, r2
-	umaal	r3, r0, r4, r5
+	umull	r4, r0, r0, r3
+	umaal	r12, r4, r1, r2
+	umaal	r4, r0, r1, r3
 
-	@ r2, r4 and r5 are free.
+	@ r1, r2 and r3 are free.
 
 	@ Product is in [2^104, 2^106 - 2^54 + 1]. We right-shift it
-	@ by 52 or 53 bits, into r5:r12, so that the output is in
+	@ by 52 or 53 bits, into r3:r12, so that the output is in
 	@ [2^52, 2^53-1]. We must keep track of dropped bits so that we
 	@ may apply rounding properly.
-	@ Set r5 to 1 if we need to shift by 53, or to 0 otherwise.
-	@ If r5 is 1 then we must adjust the exponent.
-	@ We also right-shift r1 by 20 bits to remove all the left-over
+	@ Set r3 to 1 if we need to shift by 53, or to 0 otherwise.
+	@ If r3 is 1 then we must adjust the exponent.
+	@ We also right-shift r5 by 20 bits to remove all the left-over
 	@ ignored bits from the original XOR.
-	lsrs	r5, r0, #9
-	add	r1, r5, r1, lsr #20
+	lsrs	r3, r0, #9
+	add	r5, r3, r5, lsr #20
 
-	@ Set r4 to 2^11 (if r5 = 1) or 2^12 (if r5 = 0). We will use
+	@ Set r2 to 2^11 (if r3 = 1) or 2^12 (if r3 = 0). We will use
 	@ it to perform a left shift by 11 or 12 bits, which is the same
 	@ as a right shift by 53 or 52 bits if we use the correct output
 	@ registers.
-	movw	r4, #0x1000
-	lsrs	r4, r5
-	@ r5 is now free.
-	@ Do the shift. Dropped bits are r6 (entire register) and r2 (top
+	movw	r2, #0x1000
+	lsrs	r2, r3
+	@ r3 is now free.
+	@ Do the shift. Dropped bits are r6 (entire register) and r1 (top
 	@ bits, in order, rest of the register bits are zero).
-	umull	r2, r5, r12, r4
-	mul	r12, r0, r4
-	umlal	r5, r12, r3, r4
+	umull	r1, r3, r12, r2
+	mul	r12, r0, r2
+	umlal	r3, r12, r4, r2
 
-	@ Rounding may need to add 1. The top bits of r2 are the top dropped
+	@ Rounding may need to add 1. The top bits of r1 are the top dropped
 	@ bits. We keep bit 31 as is, then compact all other dropped bits
 	@ into bit 30 ("sticky bit") and finally push a copy of the least
-	@ significant kept bit (lowest bit of r5) into bit 29 of r2.
-	orr	r6, r6, r2, lsl #1
+	@ significant kept bit (lowest bit of r3) into bit 29 of r1.
+	orr	r6, r6, r1, lsl #1
 	clz	r6, r6             @ 32 if all bits are 0
 	mvns	r6, r6, lsr #5
-	bfi	r2, r6, #30, #1
-	bfi	r2, r5, #29, #1
-	@ By adding 011 to the top bits of r2, we generate the rounding
+	bfi	r1, r6, #30, #1
+	bfi	r1, r3, #29, #1
+	@ By adding 011 to the top bits of r1, we generate the rounding
 	@ adjustment into the carry, which we can then apply to the
 	@ mantissa. The carry may propagate up to the exponent: this is
-	@ the correct behaviour. The exponent in r1 was right-shifted, so
+	@ the correct behaviour. The exponent in r5 was right-shifted, so
 	@ we must shift it back here.
-	adds	r2, r2, #0x60000000
-	adcs	r0, r5, #0
-	adcs	r1, r12, r1, lsl #20
+	adds	r1, r1, #0x60000000
+	adcs	r0, r3, #0
+	adcs	r1, r12, r5, lsl #20
 
 	@pop	{ r4, r5, r6 }
 	vmov	r4, r5, s0, s1
