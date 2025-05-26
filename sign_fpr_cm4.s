@@ -165,8 +165,9 @@ fndsa_fpr_add:
 
 	@ If r0 >= 32, then right-shift by 32 bits; r12 is set to the
 	@ dropped bits (or 0 if r0 < 32).
+	@ Since r2 is a multiple of 8 at this point, we can right-shift r12.
 	sbfx	r1, r0, #5, #1
-	and	r12, r2, r1
+	and	r12, r1, r2, lsr #1
 	bic	r2, r2, r1
 	umlal	r3, r2, r3, r1
 	@ Right-shift by r0 mod 32 bits; dropped bits (from r3) are
@@ -176,20 +177,14 @@ fndsa_fpr_add:
 	lsr	r1, r0            @ r1 <- 2^(32-sc) - 1
 	eors	r0, r0
 	umlal	r3, r0, r3, r1
-	umlal	r2, r3, r2, r1
-	orrs	r12, r12, r2
+	umlal	r2, r3, r2, r1    @ output r2 is necessarily even
+	orrs	r12, r12, r2, lsr #1
 
 	@ If r12 is non-zero then some non-zero bit was dropped and the
-	@ low bit of r3 must be forced to 1 ('sticky bit').
-	rsbs	r2, r12, #0
-	orrs	r2, r2, r12
-	orrs	r3, r3, r2, lsr #31
-	@ This could be done in one less cycle with the IT opcode, but it
-	@ would raise the thorny question of speculation -- we'd want this
-	@ code to remain constant-time on larger CPUs, and some of them
-	@ may speculate the 'it' opcode, leading to data-dependent timings.
-	@it ne
-	@orrne	r3, r3, #1
+	@ low bit of r3 must be forced to 1 ('sticky bit'). We know that
+	@ msb(r12) is 0, hence we can use usat.
+	usat	r2, #1, r12
+	orrs	r3, r2
 
 	@ x: exponent=r4, sign=r5[0:30], mantissa=r6:r7 (scaled up 3 bits)
 	@ y: sign-xor=r5[31], value=r3:r0 (scaled to same exponent as x)
@@ -395,8 +390,9 @@ fndsa_fpr_add_sub:
 
 	@ If r0 >= 32, then right-shift by 32 bits; r12 is set to the
 	@ dropped bits (or 0 if r0 < 32).
+	@ Since r2 is a multiple of 8 at this point, we can right-shift r12.
 	sbfx	r8, r0, #5, #1
-	and	r12, r2, r8
+	and	r12, r8, r2, lsr #1
 	bic	r2, r2, r8
 	umlal	r3, r2, r3, r8
 	@ Right-shift by r0 mod 32 bits; dropped bits (from r3) are
@@ -406,14 +402,14 @@ fndsa_fpr_add_sub:
 	lsr	r8, r0            @ r8 <- 2^(32-sc) - 1
 	eors	r0, r0
 	umlal	r3, r0, r3, r8
-	umlal	r2, r3, r2, r8
-	orr	r12, r12, r2
+	umlal	r2, r3, r2, r8    @ output r2 is necessarily even
+	orr	r12, r12, r2, lsr #1
 
 	@ If r12 is non-zero then some non-zero bit was dropped and the
-	@ low bit of r2 must be forced to 1 ('sticky bit').
-	rsbs	r2, r12, #0
-	orrs	r2, r2, r12
-	orrs	r3, r3, r2, lsr #31
+	@ low bit of r3 must be forced to 1 ('sticky bit'). We know that
+	@ msb(r12) is 0, hence we can use usat.
+	usat	r2, #1, r12
+	orrs	r3, r2
 
 	@ x: exponent=r4, sign=r5[30], mantissa=r6:r7 (scaled up 3 bits)
 	@ y: sign-xor=r1, value=r3:r0 (scaled to same exponent as x)
