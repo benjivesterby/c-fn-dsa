@@ -330,8 +330,8 @@ fndsa_fpr_add_sub:
 	subs	r6, r1, r1, asr #31   @ Initial borrow if x is negative
 	sbcs	r6, r0, r2            @ Sub: low words
 	sbcs	r6, r7, r3, lsl #1    @ Sub: high words (with shift of y)
-	sbc	r11, r11              @ r11 is set to 0xFFFFFFFF for a swap
-	uadd8	r4, r11, r11
+	sbc	r12, r12              @ r12 is set to 0xFFFFFFFF for a swap
+	uadd8	r4, r12, r12
 	sel	r6, r2, r0
 	sel	r7, r3, r1
 	sel	r2, r0, r2
@@ -367,8 +367,8 @@ fndsa_fpr_add_sub:
 	@   r5[30] = sign of first result
 	@   r5[31] = sign of second result
 	@ First result as the sign of x. Second result has the sign of x,
-	@ but reversed if a swap occurred (r11 = -1).
-	eor	r5, r5, r11, lsl #31
+	@ but reversed if a swap occurred (r12 = -1).
+	eor	r5, r5, r12, lsl #31
 	and	r5, r5, #0xC0000000
 
 	@ x: exponent=r4, sign=r5[30], mantissa=r6:r7 (scaled up 3 bits)
@@ -637,21 +637,20 @@ fndsa_fpr_mul:
 	umlal	r3, r12, r4, r2
 
 	@ Rounding may need to add 1. The top bits of r1 are the top dropped
-	@ bits. We keep bit 31 as is, then compact all other dropped bits
-	@ into bit 30 ("sticky bit") and finally push a copy of the least
-	@ significant kept bit (lowest bit of r3) into bit 29 of r1.
+	@ bits; subsequent bits of r1, and all bits of r6, are dropped and
+	@ should be compacted into one bit ("sticky bit"). If:
+	@   c = r3[0]                (lsb of result, before rounding)
+	@   b = r1[31]               (top droppped bit)
+	@   a = Or_all(r1[30:0],r6)  (sticky bit)
+	@ then we need to add 1 to the result if and only if:
+	@   b and (a or c) = 1
 	orr	r6, r6, r1, lsl #1
-	clz	r6, r6             @ 32 if all bits are 0
-	mvns	r6, r6, lsr #5
-	bfi	r1, r6, #30, #1
-	bfi	r1, r3, #29, #1
-	@ By adding 011 to the top bits of r1, we generate the rounding
-	@ adjustment into the carry, which we can then apply to the
-	@ mantissa. The carry may propagate up to the exponent: this is
-	@ the correct behaviour. The exponent in r5 was right-shifted, so
-	@ we must shift it back here.
-	adds	r1, r1, #0x60000000
-	adcs	r0, r3, #0
+	usat	r2, #1, r6
+	orr	r2, r2, r6, lsr #31   @ r2 <- sticky bit (c)
+	orrs	r2, r3                @ r2[0] <- a or c
+	and	r2, r2, r1, lsr #31   @ r2 <- b and (a or c)
+	@ Apply rounding adjustment to value, plugging also sign and exponent.
+	adds	r0, r3, r2
 	adcs	r1, r12, r5, lsl #20
 
 	@pop	{ r4, r5, r6 }
