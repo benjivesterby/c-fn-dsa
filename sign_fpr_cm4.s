@@ -121,18 +121,20 @@ fndsa_fpr_add:
 
 	@ Now x is in r6:r7, and y is in r2:r3.
 
-	@ Extract mantissa of x into r6:r7, exponent in r4, sign in r5.
+	@ r5[0:30] <- sign(x)
+	@ r5[31] <- sign-xor
+	and	r5, r3, #0x80000000
+	eor	r5, r5, r7, asr #31
+
+	@ Extract mantissa of x into r6:r7, exponent in r4.
 	@ For the mantissa, we must set bit 52 to 1, except if the (encoded)
 	@ exponent is zero; in the latter case, the whole value must be zero
 	@ or minus zero (we do not support subnormals).
-	asrs	r5, r7, #31        @ Sign bit (extended to whole word)
 	ubfx	r4, r7, #20, #11   @ Exponent in r4 (without sign)
 	usat	r1, #1, r4         @ r1 = 1 except if r4 = 0
 	bfi	r7, r1, #20, #12   @ Set high mantissa bits
 
 	@ Extract mantissa of y into r2:r3, exponent in r0.
-	@ Low bit of r5 receives the xor of the signs of x and y.
-	eor	r5, r5, r3, lsr #31
 	ubfx	r0, r3, #20, #11   @ Exponent in r0 (without sign)
 	usat	r1, #1, r0         @ r1 = 1 except if r0 = 0
 	bfi	r3, r1, #20, #12   @ Set high mantissa bits
@@ -144,8 +146,8 @@ fndsa_fpr_add:
 	lsls	r3, #3
 	umlal	r2, r3, r2, r1
 
-	@ x: exponent=r4, sign=msb(r5), mantissa=r6:r7 (scaled up 3 bits)
-	@ y: exponent=r0, sign-xor=lsb(r5), mantissa=r2:r3 (scaled up 3 bits)
+	@ x: exponent=r4, sign=r5[0:30], mantissa=r6:r7 (scaled up 3 bits)
+	@ y: exponent=r0, sign-xor=r5[31], mantissa=r2:r3 (scaled up 3 bits)
 
 	@ At that point, the exponent of x (in r4) is larger than that
 	@ of y (in r0). The difference is the amount of shifting that
@@ -175,27 +177,33 @@ fndsa_fpr_add:
 	eors	r0, r0
 	umlal	r3, r0, r3, r1
 	umlal	r2, r3, r2, r1
-	orr	r12, r12, r2
+	orrs	r12, r12, r2
 
 	@ If r12 is non-zero then some non-zero bit was dropped and the
 	@ low bit of r3 must be forced to 1 ('sticky bit').
 	rsbs	r2, r12, #0
 	orrs	r2, r2, r12
 	orrs	r3, r3, r2, lsr #31
+	@ This could be done in one less cycle with the IT opcode, but it
+	@ would raise the thorny question of speculation -- we'd want this
+	@ code to remain constant-time on larger CPUs, and some of them
+	@ may speculate the 'it' opcode, leading to data-dependent timings.
+	@it ne
+	@orrne	r3, r3, #1
 
-	@ x: exponent=r4, sign=r5, mantissa=r6:r7 (scaled up 3 bits)
-	@ y: sign=r1, value=r3:r0 (scaled to same exponent as x)
+	@ x: exponent=r4, sign=r5[0:30], mantissa=r6:r7 (scaled up 3 bits)
+	@ y: sign-xor=r5[31], value=r3:r0 (scaled to same exponent as x)
 
-	@ If x and y have the same sign (lsb(r5) = 0), then we add r3:r0 to
-	@ r6:r7. Otherwise (lsb(r5) = 1), we subtract r3:r0 from r6:r7. Both
+	@ If x and y have the same sign (r5[31] = 0), then we add r3:r0 to
+	@ r6:r7. Otherwise (r5[31] = 1), we subtract r3:r0 from r6:r7. Both
 	@ values are less than 2^56, and output cannot be negative.
-	sbfx	r12, r5, #0, #1   @ r12 = 0 (add) or -1 (subtract)
-	orr	r2, r12, #1       @ r2 = 1 (add) or -1 (subtract)
-	umlal	r6, r7, r3, r2
-	mul	r3, r3, r12
-	umaal	r7, r3, r0, r2
+	movs	r1, #1               @ r1 = 1 will be reused later on
+	orr	r2, r1, r5, asr #31  @ r2 = 1 (add) or -1 (subtract)
+	add	r0, r0, r3, lsr #31
+	smlal	r6, r7, r3, r2
+	mla	r7, r0, r2, r7
 
-	@ result: exponent=r4, sign=r5, mantissa=r6:r7 (scaled up 3 bits)
+	@ result: exponent=r4, sign=r5[0:30], mantissa=r6:r7 (scaled up 3 bits)
 	@ Value in r6:r7 is necessarily less than 2^57.
 
 	@ Normalize the result with some left-shifting to full 64-bit
@@ -210,11 +218,11 @@ fndsa_fpr_add:
 	@ If r2 >= 32, then r7 = 0 and r0 = -1, and we set: r6:r7 <- 0:r6
 	umlal	r6, r7, r6, r0
 	@ Left-shift by r2 mod 32
+	@ We still have r1 = 1
 	and	r2, #31
-	movs	r1, #1
 	lsls	r1, r2
 	umull	r6, r12, r6, r1
-	umlal	r12, r7, r7, r1
+	mla	r12, r1, r7, r12
 
 	@ Normalized mantissa is now in r6:r12
 	@ Since the mantissa was at most 57-bit pre-normalization, the low
@@ -244,7 +252,7 @@ fndsa_fpr_add:
 	@   - b4 = 1 and b3:b2:b1:b0 >= 1000
 	@ Equivalently, we must add +1 after the shift if and only if:
 	@   b3:b2:b1:b0:b4 + 01111 >= 100000
-	and	r5, r5, #0x80000000  @ sign of output is sign of x
+	lsls	r5, #31              @ sign of output is sign of x
 	orr	r1, r5, r4, lsl #20  @ exponent and sign
 	lsls	r3, r6, #21          @ top(r3) = b3:b2:b1:b0:00...
 	lsrs	r0, r6, #11
@@ -410,18 +418,17 @@ fndsa_fpr_add_sub:
 	@ x: exponent=r4, sign=r5[30], mantissa=r6:r7 (scaled up 3 bits)
 	@ y: sign-xor=r1, value=r3:r0 (scaled to same exponent as x)
 
-	@ Compute the sum (into r6:r7) and the difference (into r12:r8).
-	subs	r12, r6, r3
-	sbcs	r8, r7, r0
+	@ If r1 = -1, then negate the second operand. This is equivalent
+	@ to swapping the addition and subtraction results.
+	eors	r3, r1
+	eors	r0, r1
+	smlal	r3, r0, r1, r1
+
+	@ Compute the sum (into r6:r7) and the difference (into r10:r11).
+	subs	r10, r6, r3
+	sbcs	r11, r7, r0
 	adds	r6, r6, r3
 	adcs	r7, r7, r0
-
-	@ Swap the values if r1 = -1. Second output goes to: r10:r11
-	uadd8	r10, r1, r1
-	sel	r10, r6, r12
-	sel	r6, r12, r6
-	sel	r11, r7, r8
-	sel	r7, r8, r7
 
 	@ Post-processing for first output
 	@ --------------------------------
@@ -576,9 +583,8 @@ fndsa_fpr_mul:
 	ubfx	r6, r1, #20, #11
 	ubfx	r12, r3, #20, #11
 
-	@ Compute sign bit (into top of r1, other bits cleared).
+	@ Compute sign bit (into top of r1, other bits ignored).
 	eors	r1, r3
-	bfc	r1, #0, #31
 
 	@ Compute aggregate exponent (into r3).
 	adds	r3, r6, r12
@@ -598,7 +604,7 @@ fndsa_fpr_mul:
 	orr	r5, r5, r6, lsl #20
 
 	@ Plug the aggregate exponent into r1.
-	add	r1, r1, r3, lsl #20
+	bfi	r1, r3, #20, #11
 
 	@ At this point:
 	@   r0:r4   first mantissa (completed)
@@ -620,8 +626,11 @@ fndsa_fpr_mul:
 	@ may apply rounding properly.
 	@ Set r5 to 1 if we need to shift by 53, or to 0 otherwise.
 	@ If r5 is 1 then we must adjust the exponent.
+	@ We also right-shift r1 by 20 bits to remove all the left-over
+	@ ignored bits from the original XOR.
 	lsrs	r5, r0, #9
-	add	r1, r1, r5, lsl #20
+	add	r1, r5, r1, lsr #20
+
 	@ Set r4 to 2^11 (if r5 = 1) or 2^12 (if r5 = 0). We will use
 	@ it to perform a left shift by 11 or 12 bits, which is the same
 	@ as a right shift by 53 or 52 bits if we use the correct output
@@ -646,10 +655,12 @@ fndsa_fpr_mul:
 	bfi	r2, r5, #29, #1
 	@ By adding 011 to the top bits of r2, we generate the rounding
 	@ adjustment into the carry, which we can then apply to the
-	@ mantissa.
+	@ mantissa. The carry may propagate up to the exponent: this is
+	@ the correct behaviour. The exponent in r1 was right-shifted, so
+	@ we must shift it back here.
 	adds	r2, r2, #0x60000000
 	adcs	r0, r5, #0
-	adcs	r1, r12
+	adcs	r1, r12, r1, lsl #20
 
 	@pop	{ r4, r5, r6 }
 	vmov	r4, r5, s0, s1
