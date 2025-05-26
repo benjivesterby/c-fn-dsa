@@ -641,8 +641,8 @@ fndsa_fpr_mul:
 	@ then we need to add 1 to the result if and only if:
 	@   b and (a or c) = 1
 	orr	r6, r6, r1, lsl #1
-	usat	r2, #1, r6
-	orr	r2, r2, r6, lsr #31   @ r2 <- sticky bit (c)
+	subs	r6, #1
+	adcs	r2, r2                @ r2[0] <- sticky bit (c)
 	orrs	r2, r3                @ r2[0] <- a or c
 	and	r2, r2, r1, lsr #31   @ r2 <- b and (a or c)
 	@ Apply rounding adjustment to value, plugging also sign and exponent.
