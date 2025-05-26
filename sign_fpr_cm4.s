@@ -443,8 +443,8 @@ fndsa_fpr_add_sub:
 	umlal	r6, r7, r6, r0
 	@ Left-shift by r2 mod 32
 	and	r2, #31
-	movs	r1, #1
-	lsls	r1, r2
+	movs	r3, #1            @ r3 = 1 will also be useful later on
+	lsl	r1, r3, r2
 	umull	r6, r12, r6, r1
 	umlal	r12, r7, r7, r1
 
@@ -478,10 +478,10 @@ fndsa_fpr_add_sub:
 	@   b3:b2:b1:b0:b4 + 01111 >= 100000
 	lsls	r1, r5, #1           @ sign of output is sign of x
 	bfi	r1, r8, #20, #11     @ inject exponent
-	lsls	r3, r6, #21          @ top(r3) = b3:b2:b1:b0:00...
+	lsls	r8, r6, #21          @ top(r8) = b3:b2:b1:b0:00...
 	lsrs	r0, r6, #11
-	bfi	r3, r0, #27, #1      @ top(r3) = b3:b2:b1:b0:b4:00...
-	adds	r3, r3, #0x78000000  @ add 01111 to top bits, carry is adjust
+	bfi	r8, r0, #27, #1      @ top(r8) = b3:b2:b1:b0:b4:00...
+	adds	r8, r8, #0x78000000  @ add 01111 to top bits, carry is adjust
 	adcs	r0, r0, r12, lsl #21
 	adcs	r1, r1, r12, lsr #11
 
@@ -500,9 +500,9 @@ fndsa_fpr_add_sub:
 	@ Normalize the result with some left-shifting to full 64-bit
 	@ width. Shift count goes to r2, and exponent (r4) is adjusted.
 	clz	r2, r11
-	clz	r3, r10
+	clz	r7, r10
 	sbfx	r8, r2, #5, #1
-	umlal	r3, r2, r3, r8
+	umlal	r7, r2, r7, r8
 	subs	r4, r4, r2
 
 	@ Shift r10:r11 to the left by r2 bits (into r6:r12)
@@ -510,8 +510,7 @@ fndsa_fpr_add_sub:
 	umlal	r10, r11, r10, r8
 	@ Left-shift by r2 mod 32
 	and	r2, #31
-	movw	r8, #1
-	lsl	r8, r2
+	lsl	r8, r3, r2           @ We still have r3 = 1
 	umull	r6, r12, r10, r8
 	umlal	r12, r11, r11, r8
 
@@ -544,10 +543,10 @@ fndsa_fpr_add_sub:
 	@ Equivalently, we must add +1 after the shift if and only if:
 	@   b3:b2:b1:b0:b4 + 01111 >= 100000
 	bfi	r5, r4, #20, #11
-	lsls	r3, r6, #21          @ top(r3) = b3:b2:b1:b0:00...
+	lsls	r7, r6, #21          @ top(r7) = b3:b2:b1:b0:00...
 	lsr	r8, r6, #11
-	bfi	r3, r8, #27, #1      @ top(r3) = b3:b2:b1:b0:b4:00...
-	adds	r3, r3, #0x78000000  @ add 01111 to top bits, carry is adjust
+	bfi	r7, r8, #27, #1      @ top(r7) = b3:b2:b1:b0:b4:00...
+	adds	r7, r7, #0x78000000  @ add 01111 to top bits, carry is adjust
 	adcs	r2, r8, r12, lsl #21
 	adcs	r3, r5, r12, lsr #11
 
