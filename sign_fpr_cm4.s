@@ -67,9 +67,22 @@ fndsa_fpr_scaled:
 	adds	r4, r4, r1, lsl #16
 	adcs	r0, r0, r12, lsl #21
 	adcs	r1, r2, r12, lsr #11
+	bfi	r1, r5, #31, #1      @ sign
 
-	@ Insert back the sign.
-	bfi	r1, r5, #31, #1
+	@ Alternate method, kept here for future optimizations.
+	@ If the least kept bit is c, and dropped bits are b10:b0, then
+	@ the rounding adjustment is adding And(b10, Or(c, b9:b0)) (i.e.
+	@ adding 1 if b10 is 1 _and_ at least one of c or bits b0 to b9
+	@ is set).
+	@lsls	r1, r2, #20          @ exponent
+	@bfi	r1, r5, #31, #1      @ sign
+	@movw	r4, #0x0BFF
+	@ands	r4, r0
+	@usat	r4, #1, r4
+	@and	r4, r4, r0, lsr #10
+	@add	r0, r4, r0, lsr #11
+	@adds	r0, r0, r12, lsl #21
+	@adcs	r1, r1, r12, lsr #11
 
 	@pop	{ r4, r5 }
 	vmov	r4, r5, s0, s1
@@ -252,6 +265,17 @@ fndsa_fpr_add:
 	adds	r3, r3, #0x78000000  @ add 01111 to top bits, carry is adjust
 	adcs	r0, r0, r12, lsl #21
 	adcs	r1, r1, r12, lsr #11
+
+	@ Alternate rounding method: with the notations above, rounding is
+	@ +1 if b3 = 1 and at least one of {b4, b2, b1, b0} is non-zero.
+	@lsls	r5, #31              @ sign of output is sign of x
+	@orr	r1, r5, r4, lsl #20  @ exponent and sign
+	@and	r3, r6, #0x00000B80
+	@usat	r3, #1, r3
+	@and	r3, r3, r6, lsr #10
+	@add	r0, r3, r6, lsr #11
+	@adds	r0, r0, r12, lsl #21
+	@adcs	r1, r1, r12, lsr #11
 
 	@ If the mantissa in r6:r7 was zero, then r0:r1 contains zero at
 	@ this point, and the exponent r4 was cleared before, so there is
@@ -496,6 +520,7 @@ fndsa_fpr_add_sub:
 
 	@ result: exponent=r4, sign=r5[31], mantissa=r10:r11 (scaled up 3 bits)
 	@ Value in r10:r11 is necessarily less than 2^57.
+	@ r3 contains the value 1.
 
 	@ Normalize the result with some left-shifting to full 64-bit
 	@ width. Shift count goes to r2, and exponent (r4) is adjusted.
@@ -641,9 +666,8 @@ fndsa_fpr_mul:
 	@ then we need to add 1 to the result if and only if:
 	@   b and (a or c) = 1
 	orr	r6, r6, r1, lsl #1
-	subs	r6, #1
-	adcs	r2, r2                @ r2[0] <- sticky bit (c)
-	orrs	r2, r3                @ r2[0] <- a or c
+	clz	r2, r6                @ r2[5] <- not(c)
+	orn	r2, r3, r2, lsr #5    @ r2[0] <- a or c
 	and	r2, r2, r1, lsr #31   @ r2 <- b and (a or c)
 	@ Apply rounding adjustment to value, plugging also sign and exponent.
 	adds	r0, r3, r2
