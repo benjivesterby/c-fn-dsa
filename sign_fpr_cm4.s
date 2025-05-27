@@ -210,22 +210,21 @@ fndsa_fpr_add:
 
 	@ result: exponent=r4, sign=r5[0:30], mantissa=r6:r7 (scaled up 3 bits)
 	@ Value in r6:r7 is necessarily less than 2^57.
+	@ r1 = 1
 
-	@ Normalize the result with some left-shifting to full 64-bit
-	@ width. Shift count goes to r2, and exponent (r4) is adjusted.
+	@ Normalize the result with some left-shifting to full 64-bit,
+	@ adjusting the exponent (r4) accordingly.
+	@ We first handle the case of a top word (r7) entirely zero.
 	clz	r2, r7
-	clz	r3, r6
 	sbfx	r0, r2, #5, #1
-	umlal	r3, r2, r3, r0
-	subs	r4, r4, r2
-
-	@ Shift r6:r7 to the left by r2 bits.
-	@ If r2 >= 32, then r7 = 0 and r0 = -1, and we set: r6:r7 <- 0:r6
 	umlal	r6, r7, r6, r0
-	@ Left-shift by r2 mod 32
-	@ We still have r1 = 1
-	and	r2, #31
-	lsls	r1, r2
+	add	r4, r4, r0, lsl #5
+
+	@ Now we do the remaining shift, of up to 31 positions (if mantissa
+	@ is zero, the exponent is corrected afterwards).
+	clz	r2, r7
+	subs	r4, r4, r2
+	lsls	r1, r2             @ We still have r1 = 1
 	umull	r6, r12, r6, r1
 	mla	r12, r1, r7, r12
 
@@ -453,24 +452,22 @@ fndsa_fpr_add_sub:
 	@ result: exponent=r4, sign=r5[30], mantissa=r6:r7 (scaled up 3 bits)
 	@ Value in r6:r7 is necessarily less than 2^57.
 
-	@ Normalize the result with some left-shifting to full 64-bit
-	@ width. Shift count goes to r2, and exponent (r4) is adjusted.
-	@ The adjusted exponent goes to r8 (we want to keep r4 untouched).
+	@ Normalize the result with some left-shifting to full 64-bit,
+	@ adjusting the exponent (r4) accordingly.
+	@ We first handle the case of a top word (r7) entirely zero.
 	clz	r2, r7
-	clz	r3, r6
 	sbfx	r0, r2, #5, #1
-	umlal	r3, r2, r3, r0
-	sub	r8, r4, r2
-
-	@ Shift r6:r7 to the left by r2 bits.
-	@ If r2 >= 32, then r7 = 0 and r0 = -1, and we set: r6:r7 <- 0:r6
 	umlal	r6, r7, r6, r0
-	@ Left-shift by r2 mod 32
-	and	r2, #31
+	add	r8, r4, r0, lsl #5
+
+	@ Now we do the remaining shift, of up to 31 positions (if mantissa
+	@ is zero, the exponent is corrected afterwards).
+	clz	r2, r7
+	subs	r8, r8, r2
 	movs	r3, #1            @ r3 = 1 will also be useful later on
-	lsl	r1, r3, r2
+	lsls	r1, r3, r2
 	umull	r6, r12, r6, r1
-	umlal	r12, r7, r7, r1
+	mla	r12, r1, r7, r12
 
 	@ Normalized mantissa is now in r6:r12
 	@ Since the mantissa was at most 57-bit pre-normalization, the low
@@ -522,22 +519,21 @@ fndsa_fpr_add_sub:
 	@ Value in r10:r11 is necessarily less than 2^57.
 	@ r3 contains the value 1.
 
-	@ Normalize the result with some left-shifting to full 64-bit
-	@ width. Shift count goes to r2, and exponent (r4) is adjusted.
+	@ Normalize the result with some left-shifting to full 64-bit,
+	@ adjusting the exponent (r4) accordingly.
+	@ We first handle the case of a top word (r7) entirely zero.
 	clz	r2, r11
-	clz	r7, r10
 	sbfx	r8, r2, #5, #1
-	umlal	r7, r2, r7, r8
-	subs	r4, r4, r2
-
-	@ Shift r10:r11 to the left by r2 bits (into r6:r12)
-	@ If r2 >= 32, then r11 = 0 and r8 = -1, and we set: r10:r11 <- 0:r10
 	umlal	r10, r11, r10, r8
-	@ Left-shift by r2 mod 32
-	and	r2, #31
-	lsl	r8, r3, r2           @ We still have r3 = 1
+	add	r4, r4, r8, lsl #5
+
+	@ Now we do the remaining shift, of up to 31 positions (if mantissa
+	@ is zero, the exponent is corrected afterwards).
+	clz	r2, r11
+	subs	r4, r4, r2
+	lsls	r8, r3, r2           @ We still have r3 = 1
 	umull	r6, r12, r10, r8
-	umlal	r12, r11, r11, r8
+	mla	r12, r11, r8, r12
 
 	@ Normalized mantissa is now in r6:r12
 	@ Since the mantissa was at most 57-bit pre-normalization, the low
@@ -660,9 +656,9 @@ fndsa_fpr_mul:
 	@ Rounding may need to add 1. The top bits of r1 are the top dropped
 	@ bits; subsequent bits of r1, and all bits of r6, are dropped and
 	@ should be compacted into one bit ("sticky bit"). If:
-	@   c = r3[0]                (lsb of result, before rounding)
+	@   a = r3[0]                (lsb of result, before rounding)
 	@   b = r1[31]               (top droppped bit)
-	@   a = Or_all(r1[30:0],r6)  (sticky bit)
+	@   c = Or_all(r1[30:0],r6)  (sticky bit)
 	@ then we need to add 1 to the result if and only if:
 	@   b and (a or c) = 1
 	orr	r6, r6, r1, lsl #1
