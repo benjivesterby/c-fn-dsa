@@ -22,24 +22,22 @@ fndsa_fpr_scaled:
 	eors	r1, r5
 	smlal	r0, r1, r5, r5
 
-	@ Count leading zeros of r0:r1 (into r3).
-	@ r12 = -1 if r3 >= 32, 0 otherwise.
+	@ Normalize the result with some left-shifting to full 64-bit,
+	@ adjusting the scaling (r2) accordingly.
+	@ We first handle the case of a top word (r1) entirely zero.
 	clz	r3, r1
-	clz	r4, r0
 	sbfx	r12, r3, #5, #1
-	mls	r3, r4, r12, r3
+	umlal	r0, r1, r0, r12
+	add	r2, r2, r12, lsl #5
 
-	@ Normalize absolute value to [2^63,2^64-1]: we shift-left the value
-	@ by r3 bits. We also adjust the scaling (sc, in r2) accordingly.
+	@ Now we do the remaining shift, of up to 31 positions (if value
+	@ is zero, the exponent is corrected afterwards).
+	clz	r3, r1
 	subs	r2, r2, r3
-
-	@ At this point, r12 = -1 if r3 >= 32, 0 otherwise.
-	umlal	r0, r1, r0, r12   @ if r1 = 0 then r0:r1 <- 0:r0
-	and	r12, r3, #31
 	movs	r4, #1
-	lsls	r4, r12
+	lsls	r4, r3
 	umull	r0, r12, r0, r4
-	umlal	r12, r4, r1, r4
+	mla	r12, r4, r1, r12
 
 	@ Normalized absolute value is now in r0:r12.
 	@ If the source integer was zero, then r0:r12 = 0 at this point.
