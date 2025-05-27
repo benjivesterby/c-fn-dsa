@@ -13,7 +13,7 @@
 	.thumb_func
 	.type	fndsa_gaussian0_helper, %function
 fndsa_gaussian0_helper:
-	push.w	{ r4, r5, r6, r7, r8 }
+	push.w	{ r4, r5, r6, r7, r8, r10 }
 
 	adr.w	r12, fndsa_gaussian0_helper__gauss0_low
 
@@ -45,76 +45,91 @@ fndsa_gaussian0_helper:
 	sbcs	r8, r1, r5
 	sbcs	r8, r2, #2    @ high[4]
 	add.w	r3, r3, r8, lsr #31
+
+	@ Subsequent values are less than 2^63, thus they can modify the
+	@ result only if r2 = 0 and r1 < 2^31; in that case the top bit of
+	@ the subtraction of r1 is correct. We will keep making the
+	@ operations, but omitting the third subtraction, and accumulating
+	@ bits into r10.
+	movw	r10, #0
+
 	subs	r8, r0, r6
 	sbcs	r8, r1, r7
-	sbcs	r8, r2, #0    @ high[5]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[5]
+	add.w	r10, r10, r8, lsr #31
 
 	@ 6 and 7
 	ldm	r12!, { r4, r5, r6, r7 }
 	subs	r8, r0, r4
 	sbcs	r8, r1, r5
-	sbcs	r8, r2, #0    @ high[6]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[6]
+	add.w	r10, r10, r8, lsr #31
 	subs	r8, r0, r6
 	sbcs	r8, r1, r7
-	sbcs	r8, r2, #0    @ high[7]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[7]
+	add.w	r10, r10, r8, lsr #31
 
 	@ 8 and 9
 	ldm	r12!, { r4, r5, r6, r7 }
 	subs	r8, r0, r4
 	sbcs	r8, r1, r5
-	sbcs	r8, r2, #0    @ high[8]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[8]
+	add.w	r10, r10, r8, lsr #31
 	subs	r8, r0, r6
 	sbcs	r8, r1, r7
-	sbcs	r8, r2, #0    @ high[9]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[9]
+	add.w	r10, r10, r8, lsr #31
 
 	@ 10, 11 and 12
 	ldm	r12!, { r4, r5, r6, r7 }
 	subs	r8, r0, r4
 	sbcs	r8, r1, r5
-	sbcs	r8, r2, #0    @ high[10]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[10]
+	add.w	r10, r10, r8, lsr #31
 	subs	r8, r0, r6
 	sbcs	r8, r1, #148  @ mid[11]
-	sbcs	r8, r2, #0    @ high[11]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[11]
+	add.w	r10, r10, r8, lsr #31
 	subs	r8, r0, r7
 	sbcs	r8, r1, #3    @ mid[12]
-	sbcs	r8, r2, #0    @ high[12]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[12]
+	add.w	r10, r10, r8, lsr #31
 
 	@ 13, 14, 15, 16
 	ldm	r12!, { r4, r5, r6, r7 }
 	subs	r8, r0, r4
 	sbcs	r8, r1, #0    @ mid[13]
-	sbcs	r8, r2, #0    @ high[13]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[13]
+	add.w	r10, r10, r8, lsr #31
 	subs	r8, r0, r5
 	sbcs	r8, r1, #0    @ mid[14]
-	sbcs	r8, r2, #0    @ high[14]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[14]
+	add.w	r10, r10, r8, lsr #31
 	subs	r8, r0, r6
 	sbcs	r8, r1, #0    @ mid[15]
-	sbcs	r8, r2, #0    @ high[15]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[15]
+	add.w	r10, r10, r8, lsr #31
 	subs	r8, r0, r7
 	sbcs	r8, r1, #0    @ mid[16]
-	sbcs	r8, r2, #0    @ high[16]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[16]
+	add.w	r10, r10, r8, lsr #31
 
 	@ 17
 	ldr.w	r4, [r12]
 	subs	r8, r0, r4
 	sbcs	r8, r1, #0    @ mid[17]
-	sbcs	r8, r2, #0    @ high[17]
-	add.w	r3, r3, r8, lsr #31
+	@sbcs	r8, r2, #0    @ high[17]
+	add.w	r10, r10, r8, lsr #31
 
-	mov.w	r0, r3
-	pop	{ r4, r5, r6, r7, r8 }
+	@ Result is split into r10 and r3. If r2 != 0 or r1 >= 2^31, then
+	@ result in r10 is incorrect and must be cleared.
+	orr	r2, r2, r1, lsr #31
+	sub	r2, #1
+	and	r10, r10, r2, asr #31
+	add	r0, r3, r10
+
+	@mov.w	r0, r3
+	pop	{ r4, r5, r6, r7, r8, r10 }
 	bx	lr
 	.align	3
 fndsa_gaussian0_helper__gauss0_low:

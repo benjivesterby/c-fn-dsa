@@ -790,6 +790,9 @@ expm_p63(fpr x, fpr ccs)
 	uint64_t y = EXPM_COEFFS[0];
 	uint64_t z = (uint64_t)fpr_trunc(fpr_mul2e(x, 63)) << 1;
 	uint32_t z0 = (uint32_t)z, z1 = (uint32_t)(z >> 32);
+#if FNDSA_ASM_CORTEXM4
+#pragma GCC unroll 12
+#endif
 	for (size_t i = 1; i < (sizeof EXPM_COEFFS) / sizeof(uint64_t); i ++) {
 		uint32_t y0 = (uint32_t)y, y1 = (uint32_t)(y >> 32);
 #if FNDSA_ASM_CORTEXM4
