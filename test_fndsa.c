@@ -2390,6 +2390,17 @@ test_fpr(void)
 	check_add_sub(FPR_NZERO, FPR_ZERO);
 	check_add_sub(FPR_NZERO, FPR_NZERO);
 
+	if (fpr_sqr(FPR_ZERO) != 0) {
+		fprintf(stderr, "ERR sqr(+0.0) -> 0x%016llX\n",
+			(unsigned long long)fpr_sqr(FPR_ZERO));
+		exit(EXIT_FAILURE);
+	}
+	if (fpr_sqr(FPR_NZERO) != 0) {
+		fprintf(stderr, "ERR sqr(-0.0) -> 0x%016llX\n",
+			(unsigned long long)fpr_sqr(FPR_NZERO));
+		exit(EXIT_FAILURE);
+	}
+
 	for (int e = -60; e <= 60; e ++) {
 		if (fpr_scaled(0, e) != FPR_ZERO) {
 			fprintf(stderr, "ERR scaled(0,%d) -> 0x%016llX\n",
@@ -2463,6 +2474,17 @@ test_fpr(void)
 		hash_fp(&sh, fpr_mul(b, a));
 		hash_fp(&sh, fpr_mul(a, FPR_ZERO));
 		hash_fp(&sh, fpr_mul(FPR_ZERO, a));
+
+		if (fpr_mul(a, a) != fpr_sqr(a)) {
+			fprintf(stderr, "ERR sqr(0x%016llX) -> 0x%016llX\n",
+				(unsigned long long)a,
+				(unsigned long long)fpr_sqr(a));
+		}
+		if (fpr_mul(b, b) != fpr_sqr(b)) {
+			fprintf(stderr, "ERR sqr(0x%016llX) -> 0x%016llX\n",
+				(unsigned long long)b,
+				(unsigned long long)fpr_sqr(b));
+		}
 
 		hash_fp(&sh, fpr_div(a, b));
 

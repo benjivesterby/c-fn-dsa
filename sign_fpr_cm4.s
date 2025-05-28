@@ -724,6 +724,90 @@ fndsa_fpr_mul:
 	.size	fndsa_fpr_mul,.-fndsa_fpr_mul
 
 @ =======================================================================
+@ fpr fndsa_fpr_sqr(fpr x)
+@ =======================================================================
+
+	.align	2
+	.global	fndsa_fpr_sqr
+	.thumb
+	.thumb_func
+	.type	fndsa_fpr_sqr, %function
+fndsa_fpr_sqr:
+	@push	{ r4, r5 }
+	vmov	s0, s1, r4, r5
+
+	@ Get exponent into r12.
+	ubfx	r12, r1, #20, #11
+
+	@ If exponent is zero, then the result is zero (positive), so the
+	@ aggregate exponent is also zero, and we should complete the
+	@ mantissa with a 0 at bit position 52, not a 1.
+	@ If the exponent is not zero, then the aggregate exponent will be
+	@ 2*r12 - 1024; we compute it as r12 - 512, the doubling is done
+	@ later on.
+	usat	r2, #1, r12            @ r3 = 1 if r12 != 0, 0 otherwise
+	sub	r12, r12, r2, lsl #9   @ -512 (for a non-zero)
+	bfi	r1, r2, #20, #12       @ set mantissa upper bits
+
+	@ At this point:
+	@   r0:r1   mantissa (completed)
+	@   r12     aggregate exponent (to be doubled)
+	@ Other registers are free.
+
+	@ Compute mantissa product into r2:r3:r4:r5.
+	umull	r2, r3, r0, r0
+	umull	r4, r5, r0, r1
+	umaal	r3, r4, r0, r1
+	umaal	r4, r5, r1, r1
+
+	@ r0 and r1 are free.
+
+	@ Product is in [2^104, 2^106 - 2^54 + 1]. We right-shift it
+	@ by 52 or 53 bits, into r3:r5, so that the output is in
+	@ [2^52, 2^53-1]. We must keep track of dropped bits so that we
+	@ may apply rounding properly.
+	@ Set r0 to 1 if we need to shift by 53, or to 0 otherwise.
+	@ If r0 is 1 then we must adjust the exponent. We also apply the
+	@ doubling for the exponent here.
+	lsrs	r0, r5, #9
+	add	r12, r0, r12, lsl #1
+
+	@ Set r1 to 2^11 (if r0 = 1) or 2^12 (if r0 = 0). We will use
+	@ it to perform a left shift by 11 or 12 bits, which is the same
+	@ as a right shift by 53 or 52 bits if we use the correct output
+	@ registers.
+	movw	r1, #0x1000
+	lsrs	r1, r0
+	@ r0 is now free.
+	@ Do the shift. Dropped bits are r2 (entire register) and r0 (top
+	@ bits, in order, rest of the register bits are zero).
+	umull	r0, r3, r3, r1
+	muls	r5, r1
+	umlal	r3, r5, r4, r1
+
+	@ Rounding may need to add 1. The top bits of r0 are the top dropped
+	@ bits; subsequent bits of r0, and all bits of r2, are dropped and
+	@ should be compacted into one bit ("sticky bit"). If:
+	@   a = r3[0]                (lsb of result, before rounding)
+	@   b = r0[31]               (top droppped bit)
+	@   c = Or_all(r0[30:0],r2)  (sticky bit)
+	@ then we need to add 1 to the result if and only if:
+	@   b and (a or c) = 1
+	orr	r2, r2, r0, lsl #1
+	clz	r2, r2                @ r2[5] <- not(c)
+	orn	r2, r3, r2, lsr #5    @ r2[0] <- a or c
+	and	r2, r2, r0, lsr #31   @ r2 <- b and (a or c)
+	@ Apply rounding adjustment to value, plugging also exponent.
+	@ Sign is always 0 for a square.
+	adds	r0, r3, r2
+	adcs	r1, r5, r12, lsl #20
+
+	@pop	{ r4, r5 }
+	vmov	r4, r5, s0, s1
+	bx	lr
+	.size	fndsa_fpr_mul,.-fndsa_fpr_mul
+
+@ =======================================================================
 @ fpr fndsa_fpr_div(fpr x, fpr y)
 @ =======================================================================
 

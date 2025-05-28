@@ -462,6 +462,7 @@ main(void)
 	extern uint32_t bench_of32(void);
 	extern uint32_t bench_scaled(void);
 	extern uint32_t bench_add(void);
+	extern uint32_t bench_sqr(void);
 	extern uint32_t bench_mul(void);
 	extern uint32_t bench_div(void);
 	extern uint32_t bench_sqrt(void);
@@ -478,6 +479,7 @@ main(void)
 	prf("fpr_scaled:   %5u\n", bench_scaled() - cal);
 	prf("fpr_add:      %5u\n", bench_add() - cal);
 	prf("fpr_add_sub:  %5u\n", bench_add_sub() - cal - 2);
+	prf("fpr_sqr:      %5u\n", bench_sqr() - cal);
 	prf("fpr_mul:      %5u\n", bench_mul() - cal);
 	prf("fpr_div:      %5u\n", bench_div() - cal);
 	prf("fpr_sqrt:     %5u\n", bench_sqrt() - cal);

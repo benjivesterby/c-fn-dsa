@@ -271,12 +271,17 @@ fpr_double(fpr x)
 #define fpr_mul   fndsa_fpr_mul
 fpr fpr_mul(fpr x, fpr y);
 
+#if FNDSA_ASM_CORTEXM4
+#define fpr_sqr   fndsa_fpr_sqr
+fpr fpr_sqr(fpr x);
+#else
 /* Floating-point squaring. */
 static inline fpr
 fpr_sqr(fpr x)
 {
 	return fpr_mul(x, x);
 }
+#endif
 
 /* Floating-point division. */
 #define fpr_div   fndsa_fpr_div
