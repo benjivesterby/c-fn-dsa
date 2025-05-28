@@ -2480,6 +2480,30 @@ test_fpr(void)
 	hextobin(href, sizeof href, "54ada30bdb43e1f14465d944f2a665ca7eaa6e9678e9d035b0fcb8167efe9871");
 	check_eq(hbuf, href, sizeof hbuf, "KAT");
 
+	if (fpr_of32(0) != 0) {
+		fprintf(stderr, "ERR of32(0) -> 0x%016llX\n",
+			(unsigned long long)fpr_of32(0));
+		exit(EXIT_FAILURE);
+	}
+	for (int e = 0; e <= 31; e ++) {
+		for (int j = -5; j <= 5; j ++) {
+			if (e == 31 && j >= 0) {
+				break;
+			}
+			uint32_t w = ((uint32_t)1 << e) + (uint32_t)j;
+			int32_t v = *(int32_t *)&w;
+			fpr x = fpr_of32(v);
+			fpr y = fpr_of(v);
+			if (x != y) {
+				fprintf(stderr, "ERR of32(%d) -> 0x%016llX"
+					" (exp: 0x%016llX)\n", v,
+					(unsigned long long)x,
+					(unsigned long long)y);
+				exit(EXIT_FAILURE);
+			}
+		}
+	}
+
 	printf(" done.\n");
 	fflush(stdout);
 #endif

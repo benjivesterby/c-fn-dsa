@@ -1610,11 +1610,11 @@ fpoly_set_small(unsigned logn, fpr *d, const int8_t *f)
 #elif FNDSA_RV64D
 	f64 *dd = (f64 *)d;
 	for (size_t i = 0; i < n; i ++) {
-		dd[i] = f64_of(f[i]);
+		dd[i] = f64_of32(f[i]);
 	}
 #else
 	for (size_t i = 0; i < n; i ++) {
-		d[i] = fpr_of(f[i]);
+		d[i] = fpr_of32(f[i]);
 	}
 #endif
 }

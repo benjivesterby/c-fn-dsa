@@ -459,6 +459,7 @@ main(void)
 	   cost should be 2 cycles (a single 'bx lr' opcode). It is used
 	   for calibration. */
 	extern uint32_t bench_none(void);
+	extern uint32_t bench_of32(void);
 	extern uint32_t bench_scaled(void);
 	extern uint32_t bench_add(void);
 	extern uint32_t bench_mul(void);
@@ -473,6 +474,7 @@ main(void)
 	uint32_t cal = bench_none() - 2;
 	/* bench_add_sub() must perform two additional vmov in the call
 	   sequence to the special fndsa_fpr_add_sub() function. */
+	prf("fpr_of32:     %5u\n", bench_of32() - cal);
 	prf("fpr_scaled:   %5u\n", bench_scaled() - cal);
 	prf("fpr_add:      %5u\n", bench_add() - cal);
 	prf("fpr_add_sub:  %5u\n", bench_add_sub() - cal - 2);

@@ -4,6 +4,42 @@
 	.text
 
 @ =======================================================================
+@ fpr fndsa_fpr_of32(int32_t i)
+@ =======================================================================
+
+	.align	2
+	.global	fndsa_fpr_of32
+	.thumb
+	.thumb_func
+	.type	fndsa_fpr_of32, %function
+fndsa_fpr_of32:
+	@ Get absolute value.
+	eor	r2, r0, r0, asr #31
+	sub	r2, r2, r0, asr #31
+
+	@ Normalize to [2^31,2^32-1].
+	clz	r3, r2
+	lsls	r2, r3
+
+	@ Value was in [2^n,2^(n+1)-1] with n = 31 - r3. The exponent
+	@ should be n + 1023 = 1054 - r3 (but adding the mantissa will add
+	@ 1 to the exponent). Exception: if the source value is zero, then
+	@ the encoded exponent shall be zero.
+	subw	r3, r3, #1053
+	and	r3, r3, r2, asr #31
+
+	@ Plug sign and exponent in top output word.
+	and	r1, r0, #0x80000000
+	sub	r1, r1, r3, lsl #20
+
+	@ Add the mantissa. There is no rounding.
+	add	r1, r1, r2, lsr #11
+	lsls	r0, r2, #21
+
+	bx	lr
+	.size	fndsa_fpr_scaled,.-fndsa_fpr_scaled
+
+@ =======================================================================
 @ fpr fndsa_fpr_scaled(int64_t i, int sc)
 @ =======================================================================
 
@@ -563,7 +599,7 @@ fndsa_fpr_add_sub:
 	@bfi	r7, r8, #27, #1      @ top(r7) = b3:b2:b1:b0:b4:00...
 	@adds	r7, r7, #0x78000000  @ add 01111 to top bits, carry is adjust
 	@adcs	r2, r8, r12, lsl #21
-	@adcs	r5, r3, r12, lsr #11
+	@adcs	r3, r3, r12, lsr #11
 
 	@ We have a 64-bit value which we must shrink down to 53 bits, i.e.
 	@ removing the low 11 bits. Rounding must be applied. The low 12

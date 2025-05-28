@@ -29,6 +29,7 @@
 .endm
 
 BENCH	bench_none,    do_nothing
+BENCH	bench_of32,    fndsa_fpr_of32
 BENCH	bench_scaled,  fndsa_fpr_scaled
 BENCH	bench_add,     fndsa_fpr_add
 BENCH	bench_mul,     fndsa_fpr_mul

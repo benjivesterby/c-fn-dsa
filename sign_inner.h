@@ -106,6 +106,12 @@ fpr_ulsh(uint64_t x, int n)
 fpr fpr_scaled(int64_t i, int sc);
 
 #define fpr_of(i)   fpr_scaled(i, 0)
+#if FNDSA_ASM_CORTEXM4
+#define fpr_of32   fndsa_fpr_of32
+fpr fpr_of32(int32_t i);
+#else
+#define fpr_of32   fpr_of
+#endif
 
 /* Round a floating-point value to the nearest integer (roundTiesToEven
    policy). It is assumed that the mathematical result is in

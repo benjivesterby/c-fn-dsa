@@ -852,7 +852,7 @@ ber_exp(sampler_state *ss, fpr x, fpr ccs)
 	   and 0 <= r < log(2). We can use fpr_trunc() because x >= 0
 	   (fpr_trunc() is presumably a bit faster than fpr_floor()). */
 	int32_t si = (int32_t)fpr_trunc(fpr_mul(x, INV_LOG2));
-	fpr r = fpr_sub(x, fpr_mul(fpr_of(si), LOG2));
+	fpr r = fpr_sub(x, fpr_mul(fpr_of32(si), LOG2));
 
 	/* If s >= 64, sigma = 1.2, r = 0 and b = 1, then we get s >= 64
 	   if the half-Gaussian produced z >= 13, which happens with
@@ -897,7 +897,7 @@ sampler_next(sampler_state *ss, fpr mu, fpr isigma)
 {
 	/* Split center mu into s + r, for an integer s, and 0 <= r < 1. */
 	int64_t s = fpr_floor(mu);
-	fpr r = fpr_sub(mu, fpr_of(s));
+	fpr r = fpr_sub(mu, fpr_of32((int32_t)s));
 
 	/* dss = 1/(2*sigma^2) = 0.5*(isigma^2)  */
 	fpr dss = fpr_half(fpr_sqr(isigma));
@@ -939,8 +939,8 @@ sampler_next(sampler_state *ss, fpr mu, fpr isigma)
 		   rejection rate does not leak enough usable information
 		   to attackers (which is how the implementation can claim
 		   to be "constant-time").  */
-		fpr x = fpr_mul(fpr_sqr(fpr_sub(fpr_of(z), r)), dss);
-		x = fpr_sub(x, fpr_mul(fpr_of(z0 * z0), INV_2SQRSIGMA0));
+		fpr x = fpr_mul(fpr_sqr(fpr_sub(fpr_of32(z), r)), dss);
+		x = fpr_sub(x, fpr_mul(fpr_of32(z0 * z0), INV_2SQRSIGMA0));
 		if (ber_exp(ss, x, ccs)) {
 			return (int32_t)s + z;
 		}
@@ -1182,8 +1182,8 @@ ffsamp_fft_inner(sampler_state *ss, unsigned logn,
 		fpr w0 = t1[0];
 		fpr w1 = t1[1];
 		fpr leaf = fpr_mul(fpr_sqrt(d11_re), INV_SIGMA[ss->logn].f);
-		fpr y0 = fpr_of(sampler_next(ss, w0, leaf));
-		fpr y1 = fpr_of(sampler_next(ss, w1, leaf));
+		fpr y0 = fpr_of32(sampler_next(ss, w0, leaf));
+		fpr y1 = fpr_of32(sampler_next(ss, w1, leaf));
 
 		/* Merge is trivial, since logn = 1. */
 
@@ -1206,8 +1206,8 @@ ffsamp_fft_inner(sampler_state *ss, unsigned logn,
 		   the left sub-tree. tb0 is [x0, x1], and the split is
 		   trivial since logn = 1. */
 		leaf = fpr_mul(fpr_sqrt(d00_re), INV_SIGMA[ss->logn].f);
-		t0[0] = fpr_of(sampler_next(ss, x0, leaf));
-		t0[1] = fpr_of(sampler_next(ss, x1, leaf));
+		t0[0] = fpr_of32(sampler_next(ss, x0, leaf));
+		t0[1] = fpr_of32(sampler_next(ss, x1, leaf));
 #endif
 		return;
 	}
