@@ -353,44 +353,44 @@ fndsa_fpr_add_sub:
 	sel	r6, r2, r0
 	sel	r7, r3, r1
 	sel	r2, r0, r2
-	sel	r3, r1, r3
+	sel	r5, r1, r3
 
-	@ Now x is in r6:r7, and y is in r2:r3.
+	@ Now x is in r6:r7, and y is in r2:r5.
 
 	@ Extract mantissa of x into r6:r7, exponent in r4, sign in r5.
 	@ For the mantissa, we must set bit 52 to 1, except if the (encoded)
 	@ exponent is zero; in the latter case, the whole value must be zero
 	@ or minus zero (we do not support subnormals).
-	asrs	r5, r7, #31        @ Sign bit (extended to whole word)
+	asrs	r3, r7, #31        @ Sign bit (extended to whole word)
 	ubfx	r4, r7, #20, #11   @ Exponent in r4 (without sign)
 	usat	r8, #1, r4         @ r8 = 1 except if r4 = 0
 	bfi	r7, r8, #20, #12   @ Set high mantissa bits
 
-	@ Extract mantissa of y into r2:r3, exponent in r0.
+	@ Extract mantissa of y into r2:r5, exponent in r0.
 	@ r1 receives the xor of the signs of x and y (extended).
-	eor	r1, r5, r3, asr #31
-	ubfx	r0, r3, #20, #11   @ Exponent in r0 (without sign)
+	eor	r1, r3, r5, asr #31
+	ubfx	r0, r5, #20, #11   @ Exponent in r0 (without sign)
 	usat	r8, #1, r0         @ r8 = 1 except if r0 = 0
-	bfi	r3, r8, #20, #12   @ Set high mantissa bits
+	bfi	r5, r8, #20, #12   @ Set high mantissa bits
 
 	@ Scale mantissas up by three bits (i.e. multiply both by 8).
 	mov	r8, #7
 	lsls	r7, #3
 	umlal	r6, r7, r6, r8
-	lsls	r3, #3
-	umlal	r2, r3, r2, r8
+	lsls	r5, #3
+	umlal	r2, r5, r2, r8
 
 	@ Prepare signs for the two results.
-	@   r5[0..29] = 0
-	@   r5[30] = sign of first result
-	@   r5[31] = sign of second result
+	@   r3[0..29] = 0
+	@   r3[30] = sign of first result
+	@   r3[31] = sign of second result
 	@ First result as the sign of x. Second result has the sign of x,
 	@ but reversed if a swap occurred (r12 = -1).
-	eor	r5, r5, r12, lsl #31
-	and	r5, r5, #0xC0000000
+	eor	r3, r3, r12, lsl #31
+	and	r3, r3, #0xC0000000
 
-	@ x: exponent=r4, sign=r5[30], mantissa=r6:r7 (scaled up 3 bits)
-	@ y: exponent=r0, sign-xor=r1, mantissa=r2:r3 (scaled up 3 bits)
+	@ x: exponent=r4, sign=r3[30], mantissa=r6:r7 (scaled up 3 bits)
+	@ y: exponent=r0, sign-xor=r1, mantissa=r2:r5 (scaled up 3 bits)
 
 	@ At that point, the exponent of x (in r4) is larger than that
 	@ of y (in r0). The difference is the amount of shifting that
@@ -402,7 +402,7 @@ fndsa_fpr_add_sub:
 	subs	r0, r4, r0
 	usat	r0, #6, r0
 
-	@ Shift right r2:r3 by r0 bits (with result in r3:r0). The
+	@ Shift right r2:r5 by r0 bits (with result in r5:r0). The
 	@ shift count is in the 0..63 range. r12 will be non-zero if and
 	@ only if some non-zero bits were dropped.
 
@@ -412,42 +412,42 @@ fndsa_fpr_add_sub:
 	sbfx	r8, r0, #5, #1
 	and	r12, r8, r2, lsr #1
 	bic	r2, r2, r8
-	umlal	r3, r2, r3, r8
-	@ Right-shift by r0 mod 32 bits; dropped bits (from r3) are
+	umlal	r5, r2, r5, r8
+	@ Right-shift by r0 mod 32 bits; dropped bits (from r5) are
 	@ accumulated into r12 (with OR).
 	and	r0, r0, #31
 	mov	r8, #0xFFFFFFFF
 	lsr	r8, r0            @ r8 <- 2^(32-sc) - 1
 	eors	r0, r0
-	umlal	r3, r0, r3, r8
-	umlal	r2, r3, r2, r8    @ output r2 is necessarily even
+	umlal	r5, r0, r5, r8
+	umlal	r2, r5, r2, r8    @ output r2 is necessarily even
 	orr	r12, r12, r2, lsr #1
 
 	@ If r12 is non-zero then some non-zero bit was dropped and the
-	@ low bit of r3 must be forced to 1 ('sticky bit'). We know that
+	@ low bit of r5 must be forced to 1 ('sticky bit'). We know that
 	@ msb(r12) is 0, hence we can use usat.
 	usat	r2, #1, r12
-	orrs	r3, r2
+	orrs	r5, r2
 
-	@ x: exponent=r4, sign=r5[30], mantissa=r6:r7 (scaled up 3 bits)
-	@ y: sign-xor=r1, value=r3:r0 (scaled to same exponent as x)
+	@ x: exponent=r4, sign=r3[30], mantissa=r6:r7 (scaled up 3 bits)
+	@ y: sign-xor=r1, value=r5:r0 (scaled to same exponent as x)
 
 	@ If r1 = -1, then negate the second operand. This is equivalent
 	@ to swapping the addition and subtraction results.
-	eors	r3, r1
+	eors	r5, r1
 	eors	r0, r1
-	smlal	r3, r0, r1, r1
+	smlal	r5, r0, r1, r1
 
 	@ Compute the sum (into r6:r7) and the difference (into r10:r11).
-	subs	r10, r6, r3
+	subs	r10, r6, r5
 	sbcs	r11, r7, r0
-	adds	r6, r6, r3
+	adds	r6, r6, r5
 	adcs	r7, r7, r0
 
 	@ Post-processing for first output
 	@ --------------------------------
 
-	@ result: exponent=r4, sign=r5[30], mantissa=r6:r7 (scaled up 3 bits)
+	@ result: exponent=r4, sign=r3[30], mantissa=r6:r7 (scaled up 3 bits)
 	@ Value in r6:r7 is necessarily less than 2^57.
 
 	@ Normalize the result with some left-shifting to full 64-bit,
@@ -462,8 +462,8 @@ fndsa_fpr_add_sub:
 	@ is zero, the exponent is corrected afterwards).
 	clz	r2, r7
 	subs	r8, r8, r2
-	movs	r3, #1            @ r3 = 1 will also be useful later on
-	lsls	r1, r3, r2
+	movs	r5, #1            @ r5 = 1 will also be useful later on
+	lsls	r1, r5, r2
 	umull	r6, r12, r6, r1
 	mla	r12, r1, r7, r12
 
@@ -490,36 +490,32 @@ fndsa_fpr_add_sub:
 	@    b4 b3 b2 b1 b0 0000000
 	@ (as mentioned earlier, the lowest 7 bits must be zero)
 	@ After a strict right shift, b4 is the lowest bit. Rounding will
-	@ add +1 to the value if and only if:
-	@   - b4 = 0 and b3:b2:b1:b0 >= 1001
-	@   - b4 = 1 and b3:b2:b1:b0 >= 1000
-	@ Equivalently, we must add +1 after the shift if and only if:
-	@   b3:b2:b1:b0:b4 + 01111 >= 100000
-	lsls	r1, r5, #1           @ sign of output is sign of x
-	bfi	r1, r8, #20, #11     @ inject exponent
-	lsls	r8, r6, #21          @ top(r8) = b3:b2:b1:b0:00...
-	lsrs	r0, r6, #11
-	bfi	r8, r0, #27, #1      @ top(r8) = b3:b2:b1:b0:b4:00...
-	adds	r8, r8, #0x78000000  @ add 01111 to top bits, carry is adjust
-	adcs	r0, r0, r12, lsl #21
-	adcs	r1, r1, r12, lsr #11
+	@ add +1 to the value if and only if b3 = 1 AND at least one of
+	@ {b4, b2, b1, b0} is non-zero.
+	mov	r7, #0x00200000
+	and	r0, r6, #0x00000B80
+	usat	r0, #1, r0            @ r0 <- Or(b4, b2, b1, b0)
+	and	r0, r0, r6, lsr #10   @ r0 <- And(b3, Or(b4, b2, b1, b0))
+	add	r0, r0, r6, lsr #11
+	lsls	r1, r3, #1
+	bfi	r1, r8, #20, #11
+	umlal	r0, r1, r12, r7
 
-	@ If the mantissa in r6:r7 was zero, then r0:r1 contains zero at
-	@ this point, and the exponent r8 was cleared before, so there is
-	@ not need for further correcting actions.
+	@ We keep r7 = 2^21 for the rest of the processing.
 
 	@ Post-processing for second output
 	@ ---------------------------------
 
 	@ Unprocessed second output is in r10:r11
 
-	@ result: exponent=r4, sign=r5[31], mantissa=r10:r11 (scaled up 3 bits)
+	@ result: exponent=r4, sign=r3[31], mantissa=r10:r11 (scaled up 3 bits)
 	@ Value in r10:r11 is necessarily less than 2^57.
-	@ r3 contains the value 1.
+	@ r5 contains the value 1.
+	@ r7 contains the value 0x00200000 (2^21).
 
 	@ Normalize the result with some left-shifting to full 64-bit,
 	@ adjusting the exponent (r4) accordingly.
-	@ We first handle the case of a top word (r7) entirely zero.
+	@ We first handle the case of a top word (r11) entirely zero.
 	clz	r2, r11
 	sbfx	r8, r2, #5, #1
 	umlal	r10, r11, r10, r8
@@ -529,7 +525,7 @@ fndsa_fpr_add_sub:
 	@ is zero, the exponent is corrected afterwards).
 	clz	r2, r11
 	subs	r4, r4, r2
-	lsls	r8, r3, r2           @ We still have r3 = 1
+	lsls	r8, r5, r2           @ We still have r5 = 1
 	umull	r6, r12, r10, r8
 	mla	r12, r11, r8, r12
 
@@ -561,13 +557,31 @@ fndsa_fpr_add_sub:
 	@   - b4 = 1 and b3:b2:b1:b0 >= 1000
 	@ Equivalently, we must add +1 after the shift if and only if:
 	@   b3:b2:b1:b0:b4 + 01111 >= 100000
-	bfi	r5, r4, #20, #11
-	lsls	r7, r6, #21          @ top(r7) = b3:b2:b1:b0:00...
-	lsr	r8, r6, #11
-	bfi	r7, r8, #27, #1      @ top(r7) = b3:b2:b1:b0:b4:00...
-	adds	r7, r7, #0x78000000  @ add 01111 to top bits, carry is adjust
-	adcs	r2, r8, r12, lsl #21
-	adcs	r3, r5, r12, lsr #11
+	@bfi	r3, r4, #20, #11
+	@lsls	r7, r6, #21          @ top(r7) = b3:b2:b1:b0:00...
+	@lsr	r8, r6, #11
+	@bfi	r7, r8, #27, #1      @ top(r7) = b3:b2:b1:b0:b4:00...
+	@adds	r7, r7, #0x78000000  @ add 01111 to top bits, carry is adjust
+	@adcs	r2, r8, r12, lsl #21
+	@adcs	r5, r3, r12, lsr #11
+
+	@ We have a 64-bit value which we must shrink down to 53 bits, i.e.
+	@ removing the low 11 bits. Rounding must be applied. The low 12
+	@ bits of r6 (in high-to-low order) are:
+	@    b4 b3 b2 b1 b0 0000000
+	@ (as mentioned earlier, the lowest 7 bits must be zero)
+	@ After a strict right shift, b4 is the lowest bit. Rounding will
+	@ add +1 to the value if and only if b3 = 1 AND at least one of
+	@ {b4, b2, b1, b0} is non-zero.
+	@ At this point:
+	@    r7 still contains 2^21
+	@    r3[31] already contains the correct sign (and r3[19:0] = 0)
+	and	r2, r6, #0x00000B80
+	usat	r2, #1, r2            @ r0 <- Or(b4, b2, b1, b0)
+	and	r2, r2, r6, lsr #10   @ r0 <- And(b3, Or(b4, b2, b1, b0))
+	add	r2, r2, r6, lsr #11
+	bfi	r3, r4, #20, #11
+	umlal	r2, r3, r12, r7       @ r7 still contains 2^21
 
 	bx	lr
 	.size	fndsa_fpr_add_sub,.-fndsa_fpr_add_sub
