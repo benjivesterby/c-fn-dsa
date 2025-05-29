@@ -4,6 +4,33 @@
 	.text
 
 @ =======================================================================
+@
+@ FLOATING-POINT RULES
+@ --------------------
+@
+@ We use the IEEE-754 'binary64' format with roundTiesToEven policy.
+@ THESE FUNCTIONS ARE MEANT TO BE USED IN THE CONTEXT OF FALCON/FN-DSA
+@ ONLY. In particular, the following assumptions are made:
+@
+@  - Inputs and outputs are never NaN, infinite, or denormalized. Only
+@    normalized values and zeros may ever be provided as parameters
+@    or returned.
+@
+@  - No operation overflows or underflows. Divisions are always well-defined
+@    (divisor is never zero). Square roots are never called on a negative
+@    value.
+@
+@  - Encoded exponents (bits 20 to 30 of the high word) can only have
+@    a value in [547,1102] (i.e. the actual exponent is in [-476,+79],
+@    and absolute values are at least 2^(-476), and less than 2^80).
+@    See: https://eprint.iacr.org/2024/321
+@
+@ All code is designed to be constant-time (the floating-point values are
+@ secret) even in situations involving zeros.
+@
+@ =======================================================================
+
+@ =======================================================================
 @ fpr fndsa_fpr_of32(int32_t i)
 @ =======================================================================
 
@@ -588,25 +615,6 @@ fndsa_fpr_add_sub:
 	@    b4 b3 b2 b1 b0 0000000
 	@ (as mentioned earlier, the lowest 7 bits must be zero)
 	@ After a strict right shift, b4 is the lowest bit. Rounding will
-	@ add +1 to the value if and only if:
-	@   - b4 = 0 and b3:b2:b1:b0 >= 1001
-	@   - b4 = 1 and b3:b2:b1:b0 >= 1000
-	@ Equivalently, we must add +1 after the shift if and only if:
-	@   b3:b2:b1:b0:b4 + 01111 >= 100000
-	@bfi	r3, r4, #20, #11
-	@lsls	r7, r6, #21          @ top(r7) = b3:b2:b1:b0:00...
-	@lsr	r8, r6, #11
-	@bfi	r7, r8, #27, #1      @ top(r7) = b3:b2:b1:b0:b4:00...
-	@adds	r7, r7, #0x78000000  @ add 01111 to top bits, carry is adjust
-	@adcs	r2, r8, r12, lsl #21
-	@adcs	r3, r3, r12, lsr #11
-
-	@ We have a 64-bit value which we must shrink down to 53 bits, i.e.
-	@ removing the low 11 bits. Rounding must be applied. The low 12
-	@ bits of r6 (in high-to-low order) are:
-	@    b4 b3 b2 b1 b0 0000000
-	@ (as mentioned earlier, the lowest 7 bits must be zero)
-	@ After a strict right shift, b4 is the lowest bit. Rounding will
 	@ add +1 to the value if and only if b3 = 1 AND at least one of
 	@ {b4, b2, b1, b0} is non-zero.
 	@ At this point:
@@ -736,6 +744,11 @@ fndsa_fpr_sqr:
 	@push	{ r4, r5 }
 	vmov	s0, s1, r4, r5
 
+	@ fpr_sqr() is a reduced version of fpr_mul():
+	@  - Only one input, hence only one exponent and mantissa to extract.
+	@  - Output sign is always positive (0).
+	@  - With one less input, we can use fewer temporary registers.
+
 	@ Get exponent into r12.
 	ubfx	r12, r1, #20, #11
 
@@ -746,7 +759,7 @@ fndsa_fpr_sqr:
 	@ 2*r12 - 1024; we compute it as r12 - 512, the doubling is done
 	@ later on.
 	usat	r2, #1, r12            @ r3 = 1 if r12 != 0, 0 otherwise
-	sub	r12, r12, r2, lsl #9   @ -512 (for a non-zero)
+	sub	r12, r12, r2, lsl #9   @ r12 <- r12 - 512 (for a non-zero r12)
 	bfi	r1, r2, #20, #12       @ set mantissa upper bits
 
 	@ At this point:
@@ -754,7 +767,7 @@ fndsa_fpr_sqr:
 	@   r12     aggregate exponent (to be doubled)
 	@ Other registers are free.
 
-	@ Compute mantissa product into r2:r3:r4:r5.
+	@ Compute mantissa square into r2:r3:r4:r5.
 	umull	r2, r3, r0, r0
 	umull	r4, r5, r0, r1
 	umaal	r3, r4, r0, r1
