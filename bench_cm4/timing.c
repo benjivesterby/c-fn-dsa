@@ -8,8 +8,7 @@
 #include <libopencm3/stm32/usart.h>
 #include <libopencm3/stm32/flash.h>
 
-#include "../inner.h"
-#include "../sign_inner.h"
+#include "timing.h"
 
 /* Send len copies of character c onto the output UART. */
 static void
@@ -140,21 +139,7 @@ send_int64(int64_t x, unsigned base, int upper,
 	}
 }
 
-/* A printf()-lookalike. Each format element has the following format:
-     %[-][0][len][w]type
-   with:
-      -      Padding is applied after the value instead of before the value
-      0      Integer padding uses leading zeros instead of spaces
-      len    Target output length (decimal)
-      w      For an integer value: value is wide (64-bit)
-      type   One of:
-                d   signed integer (decimal)
-		u   unsigned integer (decimal)
-		x   unsigned integer (hexadecimal, lowercase)
-		X   unsigned integer (hexadecimal, uppercase)
-		s   nul-terminated character string
-   The '0' flag is ignored for strings; padding, if any, always uses spaces.
-   Conventionally, '%%' should be used to emit a '%' character. */
+/* see timing.h */
 void
 prf(const char *fmt, ...)
 {
@@ -266,8 +251,9 @@ prf(const char *fmt, ...)
 	va_end(ap);
 }
 
+#if FREQ == 24
 /* 24 MHz */
-const struct rcc_clock_scale benchmarkclock = {
+static const struct rcc_clock_scale benchmarkclock = {
 	.pllm = 8, //VCOin = HSE / PLLM = 1 MHz
 	.plln = 192, //VCOout = VCOin * PLLN = 192 MHz
 	.pllp = 8, //PLLCLK = VCOout / PLLP = 24 MHz (low to have 0WS)
@@ -283,6 +269,7 @@ const struct rcc_clock_scale benchmarkclock = {
 	.apb1_frequency = 12000000,
 	.apb2_frequency = 24000000,
 };
+#endif
 
 /* Enable the cycle counter. */
 static void
@@ -299,52 +286,6 @@ enable_cyccnt(void)
 	*DWT_CONTROL = *DWT_CONTROL | 1;
 }
 
-/* Read the current cycle count. */
-static inline uint32_t
-get_system_ticks(void)
-{
-	return *(volatile uint32_t *)0xE0001004;
-}
-
-/*
-static void
-sort_times(uint32_t *tt, size_t num)
-{
-	for (size_t u = num; u > 0; u --) {
-		uint32_t x = tt[0];
-		for (size_t v = 1; v < u; v ++) {
-			uint32_t y = tt[v];
-			if (x > y) {
-				tt[v - 1] = y;
-				tt[v] = x;
-			} else {
-				x = y;
-			}
-		}
-	}
-}
-*/
-
-static inline uint32_t
-dec32le(const void *src)
-{
-	const uint8_t *buf = src;
-	return (uint32_t)buf[0]
-		| ((uint32_t)buf[1] << 8)
-		| ((uint32_t)buf[2] << 16)
-		| ((uint32_t)buf[3] << 24);
-}
-
-static inline void
-enc32le(void *dst, uint32_t x)
-{
-	uint8_t *buf = dst;
-	buf[0] = (uint8_t)x;
-	buf[1] = (uint8_t)(x >> 8);
-	buf[2] = (uint8_t)(x >> 16);
-	buf[3] = (uint8_t)(x >> 24);
-}
-
 /* FREQ should be 24 or 168 (for 24 MHz or 168 MHz operations). Default
    is 24. At 24 MHz, memory accesses have minimal (1-cycle) latency and
    there are no prefetch or cache effects; it is the traditional speed
@@ -355,25 +296,8 @@ enc32le(void *dst, uint32_t x)
 #define FREQ   24
 #endif
 
-#if !FNDSA_ASM_CORTEXM4
-/* We must include a dummy fndsa_fpr_add_sub() for benchmark purposes, in
-   case assembly routines have been disabled; otherwise, there will be a
-   link error.
-   The dummy does an addition and a subtraction, so that the overall cost
-   is close to what the real code sequence would do; the two output values
-   are XORed so that result fits in the ABI, and the compiler does not
-   elide any call. */
-uint64_t
-fndsa_fpr_add_sub(fpr x, fpr y)
-{
-	fpr a = fpr_add(x, y);
-	fpr b = fpr_sub(x, y);
-	return a ^ b;
-}
-#endif
-
-int
-main(void)
+void
+system_init(void)
 {
 	/* Setup clock. */
 #if FREQ == 24
@@ -410,374 +334,59 @@ main(void)
 	enable_cyccnt();
 
 	/*
-	 * We display a banner which shows the current Flash flags.
+	 * Set Flash access flags.
+	 *   0x000L   Flash access latency (L = 0 to 7)
 	 *   0x0100   enable prefetch flag
 	 *   0x0200   enable instruction cache flag
 	 *   0x0400   enable data cache flag
-	 * At 24 MHz everything should be disabled (the CPU is slow enough
-	 * that Flash reads work with minimal latency). At 168 MHz we
-	 * want all three active, otherwise performance is terrible.
+	 * At 24 MHz, Flash reads work with minimal latency, so there is
+	 * no need for caching, prefetching, or extra wait states.
+	 * At 168 MHz, Flash reads need 5 wait states, so we should also
+	 * enable caches and prefetching.
 	 */
-	prf("-----------------------------------------\n");
-	prf("FLASH_ACR (orig): %08X\n", *(volatile uint32_t *)0x40023C00);
 #if FREQ == 24
-	*(volatile uint32_t *)0x40023C00 &= (uint32_t)0x0000;
+	uint32_t flash_acr = 0;
 #elif FREQ == 168
-	*(volatile uint32_t *)0x40023C00 |= (uint32_t)0x0700;
+	uint32_t flash_acr = 5 | 0x100 | 0x200 | 0x400;
 #else
 #error Unsupported frequency
 #endif
-	prf("FLASH_ACR (set):  %08X\n", *(volatile uint32_t *)0x40023C00);
-	prf("--------------------------------------------------------\n");
+	*(volatile uint32_t *)0x40023C00 = flash_acr;
 
-	/* Statically allocated arrays for objects (so that stack use
-	   remains small). */
-	static uint8_t skey[FNDSA_SIGN_KEY_SIZE(10)];
-	static uint8_t vkey[FNDSA_VRFY_KEY_SIZE(10)];
-	static uint8_t sig[FNDSA_SIGN_KEY_SIZE(10)];
-	static uint8_t tmp_small[78 * 512 + 31];
+	prf("-----------------------------------------\n");
+	prf("Frequency: %u MHz\n", FREQ);
+	prf("FLASH_ACR: 0x%08X\n", flash_acr);
+	prf("-----------------------------------------\n");
+}
 
-	/* RAM is the CCM block. For logn=10, we need to use the extra
-	   RAM block (128 kB at address 0x20000000), which is a bit slower
-	   since it can get into some contention with instruction fetching. */
-	static uint8_t *tmp_big = (uint8_t *)(uintptr_t)0x20000000;
+/* see timing.h */
+void *
+sram_free_area(size_t *len)
+{
+	/* _etext symbol is set by libopencm3 at the end of the generated
+	   ROM segment (with 32-bit alignment). */
+	extern unsigned _etext;
 
-	/* An pointer to an aligned buffer (of size at least 39936 bytes). */
-	void *tmp_aligned = (void *)
-		(((uintptr_t)tmp_small + 31) & ~(uintptr_t)31);
-
-	/* Some bench functions for small primitives. Returned value
-	   is the time taken. These primitives have a constant execution
-	   time (independent of the input values). Some need extra
-	   parameters:
-	       bench_keccak()   200-byte buffer, number of data words
-	       bench_NTT()      degree (logn, 2 to 10) and 2*n-byte buffer
-	       bench_iNTT()     degree (logn, 2 to 10) and 2*n-byte buffer
-	   Provided buffers need not be initialized but should be suitably
-	   aligned.
-	   bench_none() is for a do-nothing trivial function whose inherent
-	   cost should be 2 cycles (a single 'bx lr' opcode). It is used
-	   for calibration. */
-	extern uint32_t bench_none(void);
-	extern uint32_t bench_of32(void);
-	extern uint32_t bench_scaled(void);
-	extern uint32_t bench_add(void);
-	extern uint32_t bench_sqr(void);
-	extern uint32_t bench_mul(void);
-	extern uint32_t bench_div(void);
-	extern uint32_t bench_sqrt(void);
-	extern uint32_t bench_keccak(uint64_t *A, unsigned r);
-	extern uint32_t bench_NTT(unsigned logn, uint16_t *d);
-	extern uint32_t bench_iNTT(unsigned logn, uint16_t *d);
-	extern uint32_t bench_add_sub(void);
-
-	/* bench_none() measures a function with inherent cost 2 cycles. */
-	uint32_t cal = bench_none() - 2;
-	/* bench_add_sub() must perform two additional vmov in the call
-	   sequence to the special fndsa_fpr_add_sub() function. */
-	prf("fpr_of32:     %5u\n", bench_of32() - cal);
-	prf("fpr_scaled:   %5u\n", bench_scaled() - cal);
-	prf("fpr_add:      %5u\n", bench_add() - cal);
-	prf("fpr_add_sub:  %5u\n", bench_add_sub() - cal - 2);
-	prf("fpr_sqr:      %5u\n", bench_sqr() - cal);
-	prf("fpr_mul:      %5u\n", bench_mul() - cal);
-	prf("fpr_div:      %5u\n", bench_div() - cal);
-	prf("fpr_sqrt:     %5u\n", bench_sqrt() - cal);
-	prf("keccak:       %5u\n", bench_keccak(tmp_aligned, 17) - cal);
-
-	/* Bench SHAKE256 on 135-byte input and 136-byte output. */
-	{
-		uint8_t *buf1 = tmp_aligned;
-		uint8_t *buf2 = buf1 + 160;
-		shake_context *sc = (shake_context *)(buf2 + 160);
-		shake_init(sc, 256);
-		uint32_t begin = get_system_ticks();
-		shake_inject(sc, buf1, 135);
-		shake_flip(sc);
-		shake_extract(sc, buf2, 136);
-		uint32_t end = get_system_ticks();
-		prf("SHAKE256(135 -> 136): %5u\n", end - begin);
+	/* If _etext is in SRAM, or if it is in the low addresses, then
+	   the code is assumed to be loaded in SRAM; otherwise, SRAM1+2
+	   is free. */
+	uint32_t addr = (uint32_t)&_etext;
+	uint32_t off;
+	if (addr >= 0x20000000 && addr < 0x20020000) {
+		off = addr - 0x20000000;
+	} else if (addr < 0x00020000) {
+		off = addr;
+	} else {
+		off = 0;
 	}
+	*len = 0x20000 - off;
+	return (void *)(0x20000000 + off);
+}
 
-	prf("NTT:          n=256: %6u   n=512: %6u   n=1024: %6u\n",
-		bench_NTT(8, tmp_aligned) - cal,
-		bench_NTT(9, tmp_aligned) - cal,
-		bench_NTT(10, tmp_aligned) - cal);
-	prf("iNTT:         n=256: %6u   n=512: %6u   n=1024: %6u\n",
-		bench_iNTT(8, tmp_aligned) - cal,
-		bench_iNTT(9, tmp_aligned) - cal,
-		bench_iNTT(10, tmp_aligned) - cal);
-
-	/* Measure the time it takes to hash the public key. */
-	uint32_t time_hvk[3];
-	for (unsigned logn = 8; logn <= 10; logn ++) {
-		shake_context *sc = tmp_aligned;
-		uint32_t begin = get_system_ticks();
-		shake_init(sc, 256);
-		shake_inject(sc, vkey, FNDSA_VRFY_KEY_SIZE(logn));
-		shake_flip(sc);
-		shake_extract(sc, sig, 64);
-		uint32_t end = get_system_ticks();
-		time_hvk[logn - 8] = end - begin;
-	}
-	prf("hash(vkey):   n=256: %6u   n=512: %6u   n=1024: %6u\n",
-		time_hvk[0], time_hvk[1], time_hvk[2]);
-
-	/* For each degree, we make one measurement with a reproducible
-	   seed value. Seed was chosen such that the hash-to-point cost
-	   is the "high" one (hash-to-point uses a variable amount of
-	   SHAKE256 output, which in turn implies a variable number of
-	   invocations of Keccak-f. We consider the two most common numbers
-	   of calls to Keccak-f, and the seed exercises the higher of these
-	   two numbers. */
-	for (unsigned logn = 8; logn <= 10; logn ++) {
-		uint8_t seed[2];
-		seed[0] = (uint8_t)logn;
-		switch (logn) {
-		case 8:  seed[1] = 1; break;
-		case 9:  seed[1] = 3; break;
-		default: seed[1] = 0; break;
-		}
-		uint8_t *tmp = logn < 10 ? tmp_small : tmp_big;
-		size_t tmp_len = ((size_t)78 << logn) + 31;
-		size_t skey_len = FNDSA_SIGN_KEY_SIZE(logn);
-		size_t vkey_len = FNDSA_VRFY_KEY_SIZE(logn);
-		size_t sig_len = FNDSA_SIGNATURE_SIZE(logn);
-		uint32_t begin, end;
-
-		begin = get_system_ticks();
-		if (!fndsa_keygen_seeded_temp(logn, seed, sizeof seed,
-			skey, vkey, tmp, tmp_len))
-		{
-			prf("ERR keygen\n");
-			break;
-		}
-		end = get_system_ticks();
-		uint32_t time_kgen = end - begin;
-
-		size_t j;
-		begin = get_system_ticks();
-		if (logn >= 9) {
-			j = fndsa_sign_seeded_temp(skey, skey_len,
-				NULL, 0, FNDSA_HASH_ID_RAW, "blah", 4,
-				seed, sizeof seed, sig, sig_len, tmp, tmp_len);
-		} else {
-			j = fndsa_sign_weak_seeded_temp(skey, skey_len,
-				NULL, 0, FNDSA_HASH_ID_RAW, "blah", 4,
-				seed, sizeof seed, sig, sig_len, tmp, tmp_len);
-		}
-		end = get_system_ticks();
-		if (j != sig_len) {
-			prf("ERR sign: %u\n", j);
-			break;
-		}
-		uint32_t time_sign = end - begin;
-
-		int r;
-		begin = get_system_ticks();
-		if (logn >= 9) {
-			r = fndsa_verify_temp(sig, sig_len, vkey, vkey_len,
-				NULL, 0, FNDSA_HASH_ID_RAW, "blah", 4,
-				tmp, tmp_len);
-		} else {
-			r = fndsa_verify_weak_temp(sig, sig_len, vkey, vkey_len,
-				NULL, 0, FNDSA_HASH_ID_RAW, "blah", 4,
-				tmp, tmp_len);
-		}
-		if (!r) {
-			prf("ERR verify\n");
-			break;
-		}
-		end = get_system_ticks();
-		uint32_t time_vrfy = end - begin;
-
-		/* Second signature is in "original Falcon" mode (no
-		   context string, no hashed public key). */
-		if (logn >= 9) {
-			j = fndsa_sign_seeded_temp(skey, skey_len,
-				NULL, 0, "\xFF", "blah", 4,
-				seed, sizeof seed, sig, sig_len, tmp, tmp_len);
-		} else {
-			j = fndsa_sign_weak_seeded_temp(skey, skey_len,
-				NULL, 0, "\xFF", "blah", 4,
-				seed, sizeof seed, sig, sig_len, tmp, tmp_len);
-		}
-		if (j != sig_len) {
-			prf("ERR sign (2): %u\n", j);
-			break;
-		}
-		begin = get_system_ticks();
-		if (logn >= 9) {
-			r = fndsa_verify_temp(sig, sig_len, vkey, vkey_len,
-				NULL, 0, "\xFF", "blah", 4,
-				tmp, tmp_len);
-		} else {
-			r = fndsa_verify_weak_temp(sig, sig_len, vkey, vkey_len,
-				NULL, 0, "\xFF", "blah", 4,
-				tmp, tmp_len);
-		}
-		if (!r) {
-			prf("ERR verify (2)\n");
-			break;
-		}
-		end = get_system_ticks();
-		uint32_t time_orig = end - begin;
-
-		prf("FN-DSA(n = %4u)"
-			"  kgen: %9u  sign: %8u  vrfy: %6u  orig: %6u\n",
-			1u << logn, time_kgen, time_sign, time_vrfy, time_orig);
-	}
-
-	/* Long-run measurements. */
-	uint64_t total_kgen[3] = { 0, 0, 0 };
-	uint64_t total_sign[3] = { 0, 0, 0 };
-	uint64_t total_sign_orig[3] = { 0, 0, 0 };
-	uint64_t total_vrfy[3] = { 0, 0, 0 };
-	uint64_t total_vrfy_orig[3] = { 0, 0, 0 };
-	for (uint32_t total_num = 1;; total_num ++) {
-		for (unsigned logn = 8; logn <= 10; logn ++) {
-			uint8_t seed[5];
-			seed[0] = (uint8_t)logn;
-			enc32le(seed + 1, total_num);
-			uint8_t *tmp = logn < 10 ? tmp_small : tmp_big;
-			size_t tmp_len = ((size_t)78 << logn) + 31;
-			size_t skey_len = FNDSA_SIGN_KEY_SIZE(logn);
-			size_t vkey_len = FNDSA_VRFY_KEY_SIZE(logn);
-			size_t sig_len = FNDSA_SIGNATURE_SIZE(logn);
-			uint32_t begin, end;
-
-			begin = get_system_ticks();
-			if (!fndsa_keygen_seeded_temp(logn, seed, sizeof seed,
-				skey, vkey, tmp, tmp_len))
-			{
-				prf("ERR keygen\n");
-				break;
-			}
-			end = get_system_ticks();
-			uint32_t time_kgen = end - begin;
-
-			size_t j;
-			begin = get_system_ticks();
-			if (logn >= 9) {
-				j = fndsa_sign_seeded_temp(skey, skey_len,
-					NULL, 0, FNDSA_HASH_ID_RAW, "blah", 4,
-					seed, sizeof seed,
-					sig, sig_len, tmp, tmp_len);
-			} else {
-				j = fndsa_sign_weak_seeded_temp(skey, skey_len,
-					NULL, 0, FNDSA_HASH_ID_RAW, "blah", 4,
-					seed, sizeof seed,
-					sig, sig_len, tmp, tmp_len);
-			}
-			end = get_system_ticks();
-			if (j != sig_len) {
-				prf("ERR sign: %u\n", j);
-				break;
-			}
-			uint32_t time_sign = end - begin;
-
-			int r;
-			begin = get_system_ticks();
-			if (logn >= 9) {
-				r = fndsa_verify_temp(
-					sig, sig_len, vkey, vkey_len,
-					NULL, 0, FNDSA_HASH_ID_RAW, "blah", 4,
-					tmp, tmp_len);
-			} else {
-				r = fndsa_verify_weak_temp(
-					sig, sig_len, vkey, vkey_len,
-					NULL, 0, FNDSA_HASH_ID_RAW, "blah", 4,
-					tmp, tmp_len);
-			}
-			if (!r) {
-				prf("ERR verify\n");
-				break;
-			}
-			end = get_system_ticks();
-			uint32_t time_vrfy = end - begin;
-
-			begin = get_system_ticks();
-			if (logn >= 9) {
-				j = fndsa_sign_seeded_temp(skey, skey_len,
-					NULL, 0, "\xFF", "blah", 4,
-					seed, sizeof seed,
-					sig, sig_len, tmp, tmp_len);
-			} else {
-				j = fndsa_sign_weak_seeded_temp(skey, skey_len,
-					NULL, 0, "\xFF", "blah", 4,
-					seed, sizeof seed,
-					sig, sig_len, tmp, tmp_len);
-			}
-			end = get_system_ticks();
-			if (j != sig_len) {
-				prf("ERR sign: %u\n", j);
-				break;
-			}
-			uint32_t time_sign_orig = end - begin;
-
-			begin = get_system_ticks();
-			if (logn >= 9) {
-				r = fndsa_verify_temp(
-					sig, sig_len, vkey, vkey_len,
-					NULL, 0, "\xFF", "blah", 4,
-					tmp, tmp_len);
-			} else {
-				r = fndsa_verify_weak_temp(
-					sig, sig_len, vkey, vkey_len,
-					NULL, 0, "\xFF", "blah", 4,
-					tmp, tmp_len);
-			}
-			if (!r) {
-				prf("ERR verify\n");
-				break;
-			}
-			end = get_system_ticks();
-			uint32_t time_vrfy_orig = end - begin;
-
-			total_kgen[logn - 8] += time_kgen;
-			total_sign[logn - 8] += time_sign;
-			total_vrfy[logn - 8] += time_vrfy;
-			total_sign_orig[logn - 8] += time_sign_orig;
-			total_vrfy_orig[logn - 8] += time_vrfy_orig;
-		}
-
-		if (total_num <= 10 || (total_num % 100) == 0) {
-			uint32_t nu = total_num;
-			uint32_t na = nu >> 1;
-			prf("\nnum = %u\n", nu);
-			for (unsigned logn = 8; logn <= 10; logn ++) {
-				uint32_t tk, ts, tso, tv, tvo;
-				tk = (total_kgen[logn - 8] + na) / nu;
-				ts = (total_sign[logn - 8] + na) / nu;
-				tv = (total_vrfy[logn - 8] + na) / nu;
-				tso = (total_sign_orig[logn - 8] + na) / nu;
-				tvo = (total_vrfy_orig[logn - 8] + na) / nu;
-				prf("FN-DSA(n = %4u)  kg: %9u  sg: %8u"
-					" (%8u)  vf: %6u (%6u)\n",
-					1u << logn, tk, ts, tso, tv, tvo);
-			}
-		} else {
-			prf(".");
-		}
-	}
-
-	/* Blink the LED (PD12) on the board. */
-	while (1) {
-		int i;
-
-		gpio_toggle(GPIOD, GPIO12);
-
-		/* Upon button press, blink more slowly. */
-		if (gpio_get(GPIOA, GPIO0)) {
-			for (i = 0; i < 3000000; i++) {	/* Wait a bit. */
-				__asm__("nop");
-			}
-		}
-
-		for (i = 0; i < 3000000; i++) {		/* Wait a bit. */
-			__asm__("nop");
-		}
-	}
-
-	return 0;
+/* see timing.h */
+void
+system_exit(void)
+{
+	prf("SYSTEM EXIT\n");
+	__asm__ __volatile__ ("udf" : : : "memory", "cc");
 }
