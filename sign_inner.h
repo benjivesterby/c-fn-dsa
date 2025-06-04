@@ -633,15 +633,28 @@ void sampler_init(sampler_state *ss, unsigned logn,
 int32_t sampler_next(sampler_state *ss, fpr mu, fpr isigma);
 
 /* Apply Fast Fourier sampling:
-      ss              sampler state (initialized)
-      t0, t1          target vector
-      g00, g01, g11   Gram matrix (G = [[g00, g01], [adj(g01), g11]])
-      tmp             temporary (at least 4*n elements)
-   Output is written over t0 and t1. g00, g01 and g11 are consumed. All
-   polynomials are in FFT representation. */
+      ss    sampler state (initialized)
+      tmp   parameters and free space (total: 7*n fpr slots):
+	  t0  (n fpr slots)
+	  t1  (n fpr slots)
+	  g01 (n fpr slots)
+          g00 (hn fpr slots)
+	  g11 (hn fpr slots)
+	  free space (at least 3*n fpr slots)
+   Target vector is [t0, t1]. Gram matrix is [[g00, g01], [adj(g01), g11]]
+   with g00 and g11 being both self-adjoint (hence using only hn slots each).
+   All polynomials are in FFT representation.
+   All values are consumed. On output, the sampled vector [z0,z1] is written
+   over [t0,t1]. */
 #define ffsamp_fft   fndsa_ffsamp_fft
-void ffsamp_fft(sampler_state *ss,
-	fpr *t0, fpr *t1, fpr *g00, fpr *g01, fpr *g11, fpr *tmp);
+void ffsamp_fft(sampler_state *ss, fpr *tmp);
+
+/* This function is global on ARM Cortex M4 so that it can be called
+   from assembly code. We define its global name here so that test code
+   can override it (in test_sampler.c and test_sign.c). */
+#if FNDSA_ASM_CORTEXM4
+#define ffsamp_fft_deepest   fndsa_ffsamp_fft_deepest
+#endif
 
 /* ==================================================================== */
 /*

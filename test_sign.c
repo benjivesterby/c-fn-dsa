@@ -169,11 +169,13 @@ chacha20rng_next_u64(chacha20rng_context *pc)
 }
 
 #undef sampler_init
-#define sampler_init   chacha20_sampler_init
+#define sampler_init         chacha20_sampler_init
 #undef sampler_next
-#define sampler_next   chacha20_sampler_next
+#define sampler_next         chacha20_sampler_next
 #undef ffsamp_fft
-#define ffsamp_fft     chacha20_ffsamp_fft
+#define ffsamp_fft           chacha20_ffsamp_fft
+#undef ffsamp_fft_deepest
+#define ffsamp_fft_deepest   chacha20_ffsamp_fft_deepest
 
 #include "sign_sampler.c"
 

@@ -55,11 +55,13 @@ test_prng_next_u64(test_rng_context *pc)
 }
 
 #undef sampler_init
-#define sampler_init   test_sampler_init
+#define sampler_init         test_sampler_init
 #undef sampler_next
-#define sampler_next   test_sampler_next
+#define sampler_next         test_sampler_next
 #undef ffsamp_fft
-#define ffsamp_fft     test_ffsamp_fft
+#define ffsamp_fft           test_ffsamp_fft
+#undef ffsamp_fft_deepest
+#define ffsamp_fft_deepest   test_ffsamp_fft_deepest
 
 #include "sign_sampler.c"
 

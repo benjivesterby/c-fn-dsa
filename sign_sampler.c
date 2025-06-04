@@ -948,361 +948,390 @@ sampler_next(sampler_state *ss, fpr mu, fpr isigma)
 }
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
+TARGET_SSE2 TARGET_NEON static
+#endif
+void
+ffsamp_fft_deepest(sampler_state *ss, fpr *tmp)
+{
+	fpr *t0 = tmp;
+	fpr *t1 = tmp + 2;
+	fpr *g01 = tmp + 4;
+	fpr *g00 = tmp + 6;
+	fpr *g11 = tmp + 7;
+#if FNDSA_SSE2
+	static const union {
+		fpr f[2];
+		__m128d x;
+	} one_u = { { FPR_ONE, FPR_ONE } };
+	__m128d cz = _mm_castsi128_pd(
+		_mm_setr_epi32(0, 0, 0, -0x80000000));
+
+	/* Decompose G into LDL. g00 and g11 are self-adjoint,
+	   thus only one (real) coefficient each. */
+	__m128d g00_re = _mm_load_sd((double *)g00);
+	__m128d g01_cc = _mm_loadu_pd((double *)g01);
+	__m128d g11_re = _mm_load_sd((double *)g11);
+	__m128d inv_g00_re = _mm_div_sd(one_u.x, g00_re);
+	__m128d inv_g00 = _mm_shuffle_pd(inv_g00_re, inv_g00_re, 0);
+	__m128d mu = _mm_mul_pd(g01_cc, inv_g00);
+	__m128d zo = _mm_mul_pd(mu, g01_cc);
+	__m128d zo_re = _mm_add_sd(zo, _mm_shuffle_pd(zo, zo, 1));
+	__m128d d00_re = g00_re;
+	__m128d l01 = _mm_xor_pd(cz, mu);
+	__m128d d11_re = _mm_sub_sd(g11_re, zo_re);
+
+	/* No split on d00 and d11, since they are one-coeff each. */
+
+	/* The half-size Gram matrices for the recursive LDL tree
+	   exploration are now:
+	     - left sub-tree:   d00_re, zero, d00_re
+	     - right sub-tree:  d11_re, zero, d11_re
+	   t1 split is trivial. */
+	__m128d w = _mm_loadu_pd((double *)t1);
+	__m128d w0 = w;
+	__m128d w1 = _mm_shuffle_pd(w, w, 3);
+	__m128d leaf = _mm_mul_sd(
+		_mm_sqrt_sd(_mm_setzero_pd(), d11_re),
+		_mm_load_sd((const double *)INV_SIGMA + ss->logn));
+	__m128d y0 = _mm_cvtsi32_sd(_mm_setzero_pd(),
+		sampler_next_sse2(ss, w0, leaf));
+	__m128d y1 = _mm_cvtsi32_sd(_mm_setzero_pd(),
+		sampler_next_sse2(ss, w1, leaf));
+
+	/* Merge is trivial, since logn = 1. */
+
+	/* At this point:
+	     t0 and t1 are unmodified; t1 is also [w0, w1]
+	     l10 is in [l10_re, l10_im]
+	     z1 is [y0, y1]
+	   Compute tb0 = t0 + (t1 - z1)*l10  (into [x0, x1]).
+	   z1 is moved into t1. */
+	__m128d y = _mm_shuffle_pd(y0, y1, 0);
+	__m128d a = _mm_sub_pd(w, y);
+	__m128d b1 = _mm_mul_pd(a, _mm_xor_pd(cz, l01));
+	__m128d b2 = _mm_mul_pd(a, _mm_shuffle_pd(l01, l01, 1));
+	__m128d b = _mm_add_pd(
+		_mm_shuffle_pd(b1, b2, 2),
+		_mm_shuffle_pd(b1, b2, 1));
+	__m128d x = _mm_add_pd(b, _mm_loadu_pd((double *)t0));
+	_mm_storeu_pd((double *)t1, y);
+
+	/* Second recursive invocation, on the split tb0, using
+	   the left sub-tree. tb0 is [x0, x1], and the split is
+	   trivial since logn = 1. */
+	__m128d x0 = x;
+	__m128d x1 = _mm_shuffle_pd(x, x, 3);
+	leaf = _mm_mul_sd(
+		_mm_sqrt_sd(_mm_setzero_pd(), d00_re),
+		_mm_load_sd((const double *)INV_SIGMA + ss->logn));
+	x0 = _mm_cvtsi32_sd(_mm_setzero_pd(),
+		sampler_next_sse2(ss, x0, leaf));
+	x1 = _mm_cvtsi32_sd(_mm_setzero_pd(),
+		sampler_next_sse2(ss, x1, leaf));
+	_mm_store_sd((double *)t0, x0);
+	_mm_store_sd((double *)t0 + 1, x1);
+#elif FNDSA_NEON
+	static const fpr_u one_u = { FPR_ONE };
+	static const union { fpr f[2]; float64x2_t x; }
+		cz = { { FPR_ZERO, FPR_NZERO } };
+
+	/* Decompose G into LDL. g00 and g11 are self-adjoint,
+	   thus only one (real) coefficient each. */
+	float64x1_t g00_re = vld1_f64((float64_t *)g00);
+	float64x2_t g01_cc = vld1q_f64((float64_t *)g01);
+	float64x1_t g11_re = vld1_f64((float64_t *)g11);
+	float64x1_t inv_g00_re = vdiv_f64(one_u.v, g00_re);
+	float64x2_t inv_g00 = vdupq_lane_f64(inv_g00_re, 0);
+	float64x2_t mu = vmulq_f64(g01_cc, inv_g00);
+	float64x2_t zo = vmulq_f64(mu, g01_cc);
+	float64x1_t zo_re = vget_low_f64(vpaddq_f64(zo, zo));
+	float64x1_t d00_re = g00_re;
+	float64x2_t l01 = vreinterpretq_f64_u64(
+		veorq_u64(cz.x, vreinterpretq_u64_f64(mu)));
+	float64x1_t d11_re = vsub_f64(g11_re, zo_re);
+
+	/* No split on d00 and d11, since they are one-coeff each. */
+
+	/* The half-size Gram matrices for the recursive LDL tree
+	   exploration are now:
+	     - left sub-tree:   d00_re, zero, d00_re
+	     - right sub-tree:  d11_re, zero, d11_re
+	   t1 split is trivial. */
+	float64x2_t w = vld1q_f64((const float64_t *)t1);
+	float64x1_t w0 = vget_low_f64(w);
+	float64x1_t w1 = vget_high_f64(w);
+	float64x1_t leaf = vmul_f64(
+		vsqrt_f64(d11_re),
+		INV_SIGMA[ss->logn].v);
+	float64x1_t y0 = vcvt_f64_s64(vcreate_s64(
+		sampler_next_neon(ss, w0, leaf)));
+	float64x1_t y1 = vcvt_f64_s64(vcreate_s64(
+		sampler_next_neon(ss, w1, leaf)));
+
+	/* Merge is trivial, since logn = 1. */
+
+	/* At this point:
+	     t0 and t1 are unmodified; t1 is also [w0, w1]
+	     l10 is in [l10_re, l10_im]
+	     z1 is [y0, y1]
+	   Compute tb0 = t0 + (t1 - z1)*l10  (into [x0, x1]).
+	   z1 is moved into t1. */
+	float64x2_t y = vcombine_f64(y0, y1);
+	float64x2_t a = vsubq_f64(w, y);
+	float64x2_t b1 = vmulq_f64(a,
+		vreinterpretq_f64_u64(veorq_u64(cz.x,
+			vreinterpretq_u64_f64(l01))));
+	float64x2_t b2 = vmulq_f64(a, vextq_f64(l01, l01, 1));
+	float64x2_t b = vpaddq_f64(b1, b2);
+	float64x2_t x = vaddq_f64(b, vld1q_f64((const float64_t *)t0));
+	vst1q_f64((float64_t *)t1, y);
+
+	/* Second recursive invocation, on the split tb0, using
+	   the left sub-tree. tb0 is [x0, x1], and the split is
+	   trivial since logn = 1. */
+	float64x1_t x0 = vget_low_f64(x);
+	float64x1_t x1 = vget_high_f64(x);
+	leaf = vmul_f64(
+		vsqrt_f64(d00_re),
+		INV_SIGMA[ss->logn].v);
+	x0 = vcvt_f64_s64(vcreate_s64(
+		sampler_next_neon(ss, x0, leaf)));
+	x1 = vcvt_f64_s64(vcreate_s64(
+		sampler_next_neon(ss, x1, leaf)));
+	vst1_f64((float64_t *)t0, x0);
+	vst1_f64((float64_t *)t0 + 1, x1);
+#elif FNDSA_RV64D
+	/* Decompose G into LDL. g00 and g11 are self-adjoint,
+	   thus only one (real) coefficient each. */
+	f64 g00_re = ((const f64 *)g00)[0];
+	f64 g01_re = ((const f64 *)g01)[0];
+	f64 g01_im = ((const f64 *)g01)[1];
+	f64 g11_re = ((const f64 *)g11)[0];
+	f64 inv_g00_re = f64_inv(g00_re);
+	f64 mu_re = f64_mul(g01_re, inv_g00_re);
+	f64 mu_im = f64_mul(g01_im, inv_g00_re);
+	f64 zo_re = f64_add(
+		f64_mul(mu_re, g01_re),
+		f64_mul(mu_im, g01_im));
+	f64 d00_re = g00_re;
+	f64 l01_re = mu_re;
+	f64 l01_im = f64_neg(mu_im);
+	f64 d11_re = f64_sub(g11_re, zo_re);
+
+	/* No split on d00 and d11, since they are one-coeff each. */
+
+	/* The half-size Gram matrices for the recursive LDL tree
+	   exploration are now:
+	     - left sub-tree:   d00_re, zero, d00_re
+	     - right sub-tree:  d11_re, zero, d11_re
+	   t1 split is trivial. */
+	f64 w0 = ((const f64 *)t1)[0];
+	f64 w1 = ((const f64 *)t1)[1];
+	f64 leaf = f64_mul(f64_sqrt(d11_re), INV_SIGMA[ss->logn].v);
+	f64 y0 = f64_of(sampler_next_rv64d(ss, w0, leaf));
+	f64 y1 = f64_of(sampler_next_rv64d(ss, w1, leaf));
+
+	/* Merge is trivial, since logn = 1. */
+
+	/* At this point:
+	     t0 and t1 are unmodified; t1 is also [w0, w1]
+	     l10 is in [l10_re, l10_im]
+	     z1 is [y0, y1]
+	   Compute tb0 = t0 + (t1 - z1)*l10  (into [x0, x1]).
+	   z1 is moved into t1. */
+	f64 a_re = f64_sub(w0, y0);
+	f64 a_im = f64_sub(w1, y1);
+	f64 b_re = f64_sub(
+		f64_mul(a_re, l01_re),
+		f64_mul(a_im, l01_im));
+	f64 b_im = f64_add(
+		f64_mul(a_im, l01_re),
+		f64_mul(a_re, l01_im));
+	f64 x0 = f64_add(((const f64 *)t0)[0], b_re);
+	f64 x1 = f64_add(((const f64 *)t0)[1], b_im);
+	((f64 *)t1)[0] = y0;
+	((f64 *)t1)[1] = y1;
+
+	/* Second recursive invocation, on the split tb0, using
+	   the left sub-tree. tb0 is [x0, x1], and the split is
+	   trivial since logn = 1. */
+	leaf = f64_mul(f64_sqrt(d00_re), INV_SIGMA[ss->logn].v);
+	((f64 *)t0)[0] = f64_of(sampler_next_rv64d(ss, x0, leaf));
+	((f64 *)t0)[1] = f64_of(sampler_next_rv64d(ss, x1, leaf));
+#else
+	/* Decompose G into LDL. g00 and g11 are self-adjoint,
+	   thus only one (real) coefficient each. */
+	fpr g00_re = g00[0];
+	fpr g01_re = g01[0], g01_im = g01[1];
+	fpr g11_re = g11[0];
+	fpr inv_g00_re = fpr_inv(g00_re);
+	fpr mu_re = fpr_mul(g01_re, inv_g00_re);
+	fpr mu_im = fpr_mul(g01_im, inv_g00_re);
+	fpr zo_re = fpr_add(
+		fpr_mul(mu_re, g01_re),
+		fpr_mul(mu_im, g01_im));
+	fpr d00_re = g00_re;
+	fpr l01_re = mu_re;
+	fpr l01_im = fpr_neg(mu_im);
+	fpr d11_re = fpr_sub(g11_re, zo_re);
+
+	/* No split on d00 and d11, since they are one-coeff each. */
+
+	/* The half-size Gram matrices for the recursive LDL tree
+	   exploration are now:
+	     - left sub-tree:   d00_re, zero, d00_re
+	     - right sub-tree:  d11_re, zero, d11_re
+	   t1 split is trivial. */
+	fpr w0 = t1[0];
+	fpr w1 = t1[1];
+	fpr leaf = fpr_mul(fpr_sqrt(d11_re), INV_SIGMA[ss->logn].f);
+	fpr y0 = fpr_of32(sampler_next(ss, w0, leaf));
+	fpr y1 = fpr_of32(sampler_next(ss, w1, leaf));
+
+	/* Merge is trivial, since logn = 1. */
+
+	/* At this point:
+	     t0 and t1 are unmodified; t1 is also [w0, w1]
+	     l10 is in [l10_re, l10_im]
+	     z1 is [y0, y1]
+	   Compute tb0 = t0 + (t1 - z1)*l10  (into [x0, x1]).
+	   z1 is moved into t1. */
+	fpr a_re = fpr_sub(w0, y0);
+	fpr a_im = fpr_sub(w1, y1);
+	fpr b_re, b_im;
+	FPC_MUL(b_re, b_im, a_re, a_im, l01_re, l01_im);
+	fpr x0 = fpr_add(t0[0], b_re);
+	fpr x1 = fpr_add(t0[1], b_im);
+	t1[0] = y0;
+	t1[1] = y1;
+
+	/* Second recursive invocation, on the split tb0, using
+	   the left sub-tree. tb0 is [x0, x1], and the split is
+	   trivial since logn = 1. */
+	leaf = fpr_mul(fpr_sqrt(d00_re), INV_SIGMA[ss->logn].f);
+	t0[0] = fpr_of32(sampler_next(ss, x0, leaf));
+	t0[1] = fpr_of32(sampler_next(ss, x1, leaf));
+#endif
+	return;
+}
+
+#if FNDSA_ASM_CORTEXM4
+#define ffsamp_fft_inner   fndsa_ffsamp_fft_inner
+void ffsamp_fft_inner(sampler_state *ss, unsigned logn, fpr *tmp);
+#else
 TARGET_SSE2 TARGET_NEON
 static void
-ffsamp_fft_inner(sampler_state *ss, unsigned logn,
-	fpr *t0, fpr *t1, fpr *g00, fpr *g01, fpr *g11, fpr *tmp)
+ffsamp_fft_inner(sampler_state *ss, unsigned logn, fpr *tmp)
 {
-	/* When logn = 1, arrays have length 2; we unroll the last steps. */
+	/* When logn = 1, arrays have length 2; we unroll the last steps
+	   in a dedicated function. */
 	if (logn == 1) {
-#if FNDSA_SSE2
-		static const union {
-			fpr f[2];
-			__m128d x;
-		} one_u = { { FPR_ONE, FPR_ONE } };
-		__m128d cz = _mm_castsi128_pd(
-			_mm_setr_epi32(0, 0, 0, -0x80000000));
-
-		/* Decompose G into LDL. g00 and g11 are self-adjoint,
-		   thus only one (real) coefficient each. */
-		__m128d g00_re = _mm_load_sd((double *)g00);
-		__m128d g01_cc = _mm_loadu_pd((double *)g01);
-		__m128d g11_re = _mm_load_sd((double *)g11);
-		__m128d inv_g00_re = _mm_div_sd(one_u.x, g00_re);
-		__m128d inv_g00 = _mm_shuffle_pd(inv_g00_re, inv_g00_re, 0);
-		__m128d mu = _mm_mul_pd(g01_cc, inv_g00);
-		__m128d zo = _mm_mul_pd(mu, g01_cc);
-		__m128d zo_re = _mm_add_sd(zo, _mm_shuffle_pd(zo, zo, 1));
-		__m128d d00_re = g00_re;
-		__m128d l01 = _mm_xor_pd(cz, mu);
-		__m128d d11_re = _mm_sub_sd(g11_re, zo_re);
-
-		/* No split on d00 and d11, since they are one-coeff each. */
-
-		/* The half-size Gram matrices for the recursive LDL tree
-		   exploration are now:
-		     - left sub-tree:   d00_re, zero, d00_re
-		     - right sub-tree:  d11_re, zero, d11_re
-		   t1 split is trivial. */
-		__m128d w = _mm_loadu_pd((double *)t1);
-		__m128d w0 = w;
-		__m128d w1 = _mm_shuffle_pd(w, w, 3);
-		__m128d leaf = _mm_mul_sd(
-			_mm_sqrt_sd(_mm_setzero_pd(), d11_re),
-			_mm_load_sd((const double *)INV_SIGMA + ss->logn));
-		__m128d y0 = _mm_cvtsi32_sd(_mm_setzero_pd(),
-			sampler_next_sse2(ss, w0, leaf));
-		__m128d y1 = _mm_cvtsi32_sd(_mm_setzero_pd(),
-			sampler_next_sse2(ss, w1, leaf));
-
-		/* Merge is trivial, since logn = 1. */
-
-		/* At this point:
-		     t0 and t1 are unmodified; t1 is also [w0, w1]
-		     l10 is in [l10_re, l10_im]
-		     z1 is [y0, y1]
-		   Compute tb0 = t0 + (t1 - z1)*l10  (into [x0, x1]).
-		   z1 is moved into t1. */
-		__m128d y = _mm_shuffle_pd(y0, y1, 0);
-		__m128d a = _mm_sub_pd(w, y);
-		__m128d b1 = _mm_mul_pd(a, _mm_xor_pd(cz, l01));
-		__m128d b2 = _mm_mul_pd(a, _mm_shuffle_pd(l01, l01, 1));
-		__m128d b = _mm_add_pd(
-			_mm_shuffle_pd(b1, b2, 2),
-			_mm_shuffle_pd(b1, b2, 1));
-		__m128d x = _mm_add_pd(b, _mm_loadu_pd((double *)t0));
-		_mm_storeu_pd((double *)t1, y);
-
-		/* Second recursive invocation, on the split tb0, using
-		   the left sub-tree. tb0 is [x0, x1], and the split is
-		   trivial since logn = 1. */
-		__m128d x0 = x;
-		__m128d x1 = _mm_shuffle_pd(x, x, 3);
-		leaf = _mm_mul_sd(
-			_mm_sqrt_sd(_mm_setzero_pd(), d00_re),
-			_mm_load_sd((const double *)INV_SIGMA + ss->logn));
-		x0 = _mm_cvtsi32_sd(_mm_setzero_pd(),
-			sampler_next_sse2(ss, x0, leaf));
-		x1 = _mm_cvtsi32_sd(_mm_setzero_pd(),
-			sampler_next_sse2(ss, x1, leaf));
-		_mm_store_sd((double *)t0, x0);
-		_mm_store_sd((double *)t0 + 1, x1);
-#elif FNDSA_NEON
-		static const fpr_u one_u = { FPR_ONE };
-		static const union { fpr f[2]; float64x2_t x; }
-			cz = { { FPR_ZERO, FPR_NZERO } };
-
-		/* Decompose G into LDL. g00 and g11 are self-adjoint,
-		   thus only one (real) coefficient each. */
-		float64x1_t g00_re = vld1_f64((float64_t *)g00);
-		float64x2_t g01_cc = vld1q_f64((float64_t *)g01);
-		float64x1_t g11_re = vld1_f64((float64_t *)g11);
-		float64x1_t inv_g00_re = vdiv_f64(one_u.v, g00_re);
-		float64x2_t inv_g00 = vdupq_lane_f64(inv_g00_re, 0);
-		float64x2_t mu = vmulq_f64(g01_cc, inv_g00);
-		float64x2_t zo = vmulq_f64(mu, g01_cc);
-		float64x1_t zo_re = vget_low_f64(vpaddq_f64(zo, zo));
-		float64x1_t d00_re = g00_re;
-		float64x2_t l01 = vreinterpretq_f64_u64(
-			veorq_u64(cz.x, vreinterpretq_u64_f64(mu)));
-		float64x1_t d11_re = vsub_f64(g11_re, zo_re);
-
-		/* No split on d00 and d11, since they are one-coeff each. */
-
-		/* The half-size Gram matrices for the recursive LDL tree
-		   exploration are now:
-		     - left sub-tree:   d00_re, zero, d00_re
-		     - right sub-tree:  d11_re, zero, d11_re
-		   t1 split is trivial. */
-		float64x2_t w = vld1q_f64((const float64_t *)t1);
-		float64x1_t w0 = vget_low_f64(w);
-		float64x1_t w1 = vget_high_f64(w);
-		float64x1_t leaf = vmul_f64(
-			vsqrt_f64(d11_re),
-			INV_SIGMA[ss->logn].v);
-		float64x1_t y0 = vcvt_f64_s64(vcreate_s64(
-			sampler_next_neon(ss, w0, leaf)));
-		float64x1_t y1 = vcvt_f64_s64(vcreate_s64(
-			sampler_next_neon(ss, w1, leaf)));
-
-		/* Merge is trivial, since logn = 1. */
-
-		/* At this point:
-		     t0 and t1 are unmodified; t1 is also [w0, w1]
-		     l10 is in [l10_re, l10_im]
-		     z1 is [y0, y1]
-		   Compute tb0 = t0 + (t1 - z1)*l10  (into [x0, x1]).
-		   z1 is moved into t1. */
-		float64x2_t y = vcombine_f64(y0, y1);
-		float64x2_t a = vsubq_f64(w, y);
-		float64x2_t b1 = vmulq_f64(a,
-			vreinterpretq_f64_u64(veorq_u64(cz.x,
-				vreinterpretq_u64_f64(l01))));
-		float64x2_t b2 = vmulq_f64(a, vextq_f64(l01, l01, 1));
-		float64x2_t b = vpaddq_f64(b1, b2);
-		float64x2_t x = vaddq_f64(b, vld1q_f64((const float64_t *)t0));
-		vst1q_f64((float64_t *)t1, y);
-
-		/* Second recursive invocation, on the split tb0, using
-		   the left sub-tree. tb0 is [x0, x1], and the split is
-		   trivial since logn = 1. */
-		float64x1_t x0 = vget_low_f64(x);
-		float64x1_t x1 = vget_high_f64(x);
-		leaf = vmul_f64(
-			vsqrt_f64(d00_re),
-			INV_SIGMA[ss->logn].v);
-		x0 = vcvt_f64_s64(vcreate_s64(
-			sampler_next_neon(ss, x0, leaf)));
-		x1 = vcvt_f64_s64(vcreate_s64(
-			sampler_next_neon(ss, x1, leaf)));
-		vst1_f64((float64_t *)t0, x0);
-		vst1_f64((float64_t *)t0 + 1, x1);
-#elif FNDSA_RV64D
-		/* Decompose G into LDL. g00 and g11 are self-adjoint,
-		   thus only one (real) coefficient each. */
-		f64 g00_re = ((const f64 *)g00)[0];
-		f64 g01_re = ((const f64 *)g01)[0];
-		f64 g01_im = ((const f64 *)g01)[1];
-		f64 g11_re = ((const f64 *)g11)[0];
-		f64 inv_g00_re = f64_inv(g00_re);
-		f64 mu_re = f64_mul(g01_re, inv_g00_re);
-		f64 mu_im = f64_mul(g01_im, inv_g00_re);
-		f64 zo_re = f64_add(
-			f64_mul(mu_re, g01_re),
-			f64_mul(mu_im, g01_im));
-		f64 d00_re = g00_re;
-		f64 l01_re = mu_re;
-		f64 l01_im = f64_neg(mu_im);
-		f64 d11_re = f64_sub(g11_re, zo_re);
-
-		/* No split on d00 and d11, since they are one-coeff each. */
-
-		/* The half-size Gram matrices for the recursive LDL tree
-		   exploration are now:
-		     - left sub-tree:   d00_re, zero, d00_re
-		     - right sub-tree:  d11_re, zero, d11_re
-		   t1 split is trivial. */
-		f64 w0 = ((const f64 *)t1)[0];
-		f64 w1 = ((const f64 *)t1)[1];
-		f64 leaf = f64_mul(f64_sqrt(d11_re), INV_SIGMA[ss->logn].v);
-		f64 y0 = f64_of(sampler_next_rv64d(ss, w0, leaf));
-		f64 y1 = f64_of(sampler_next_rv64d(ss, w1, leaf));
-
-		/* Merge is trivial, since logn = 1. */
-
-		/* At this point:
-		     t0 and t1 are unmodified; t1 is also [w0, w1]
-		     l10 is in [l10_re, l10_im]
-		     z1 is [y0, y1]
-		   Compute tb0 = t0 + (t1 - z1)*l10  (into [x0, x1]).
-		   z1 is moved into t1. */
-		f64 a_re = f64_sub(w0, y0);
-		f64 a_im = f64_sub(w1, y1);
-		f64 b_re = f64_sub(
-			f64_mul(a_re, l01_re),
-			f64_mul(a_im, l01_im));
-		f64 b_im = f64_add(
-			f64_mul(a_im, l01_re),
-			f64_mul(a_re, l01_im));
-		f64 x0 = f64_add(((const f64 *)t0)[0], b_re);
-		f64 x1 = f64_add(((const f64 *)t0)[1], b_im);
-		((f64 *)t1)[0] = y0;
-		((f64 *)t1)[1] = y1;
-
-		/* Second recursive invocation, on the split tb0, using
-		   the left sub-tree. tb0 is [x0, x1], and the split is
-		   trivial since logn = 1. */
-		leaf = f64_mul(f64_sqrt(d00_re), INV_SIGMA[ss->logn].v);
-		((f64 *)t0)[0] = f64_of(sampler_next_rv64d(ss, x0, leaf));
-		((f64 *)t0)[1] = f64_of(sampler_next_rv64d(ss, x1, leaf));
-#else
-		/* Decompose G into LDL. g00 and g11 are self-adjoint,
-		   thus only one (real) coefficient each. */
-		fpr g00_re = g00[0];
-		fpr g01_re = g01[0], g01_im = g01[1];
-		fpr g11_re = g11[0];
-		fpr inv_g00_re = fpr_inv(g00_re);
-		fpr mu_re = fpr_mul(g01_re, inv_g00_re);
-		fpr mu_im = fpr_mul(g01_im, inv_g00_re);
-		fpr zo_re = fpr_add(
-			fpr_mul(mu_re, g01_re),
-			fpr_mul(mu_im, g01_im));
-		fpr d00_re = g00_re;
-		fpr l01_re = mu_re;
-		fpr l01_im = fpr_neg(mu_im);
-		fpr d11_re = fpr_sub(g11_re, zo_re);
-
-		/* No split on d00 and d11, since they are one-coeff each. */
-
-		/* The half-size Gram matrices for the recursive LDL tree
-		   exploration are now:
-		     - left sub-tree:   d00_re, zero, d00_re
-		     - right sub-tree:  d11_re, zero, d11_re
-		   t1 split is trivial. */
-		fpr w0 = t1[0];
-		fpr w1 = t1[1];
-		fpr leaf = fpr_mul(fpr_sqrt(d11_re), INV_SIGMA[ss->logn].f);
-		fpr y0 = fpr_of32(sampler_next(ss, w0, leaf));
-		fpr y1 = fpr_of32(sampler_next(ss, w1, leaf));
-
-		/* Merge is trivial, since logn = 1. */
-
-		/* At this point:
-		     t0 and t1 are unmodified; t1 is also [w0, w1]
-		     l10 is in [l10_re, l10_im]
-		     z1 is [y0, y1]
-		   Compute tb0 = t0 + (t1 - z1)*l10  (into [x0, x1]).
-		   z1 is moved into t1. */
-		fpr a_re = fpr_sub(w0, y0);
-		fpr a_im = fpr_sub(w1, y1);
-		fpr b_re, b_im;
-		FPC_MUL(b_re, b_im, a_re, a_im, l01_re, l01_im);
-		fpr x0 = fpr_add(t0[0], b_re);
-		fpr x1 = fpr_add(t0[1], b_im);
-		t1[0] = y0;
-		t1[1] = y1;
-
-		/* Second recursive invocation, on the split tb0, using
-		   the left sub-tree. tb0 is [x0, x1], and the split is
-		   trivial since logn = 1. */
-		leaf = fpr_mul(fpr_sqrt(d00_re), INV_SIGMA[ss->logn].f);
-		t0[0] = fpr_of32(sampler_next(ss, x0, leaf));
-		t0[1] = fpr_of32(sampler_next(ss, x1, leaf));
-#endif
+		ffsamp_fft_deepest(ss, tmp);
 		return;
 	}
 
 	/* General case: logn >= 2 */
-	size_t n = (size_t)1 << logn;
-	size_t hn = n >> 1;
-	size_t qn = hn >> 1;
 
-	/* Input:
-	     len(g00) = hn
-	     len(g01) = n
-	     len(g11) = hn  */
+	/* Layout: we split the tmp[] space into 28 chunks of size qn = n/4.
+	   All offsets below are expressed in multiples of qn.
+
+	   Input:
+	      0..3     t0
+	      4..7     t1
+	      8..11    g01
+	      12..13   g00 (self-adjoint)
+	      14..15   g11 (self-adjoint)
+	      16..27   free space
+
+	   All recursive calls make the callee input start at offset 14:
+	   the callee receives half the space for half the degree. */
+#define qc(off)   (tmp + ((off) << (logn - 2)))
 
 	/* Decompose G into LDL; the decomposed matrix replaces G. */
-	fpoly_LDL_fft(logn, g00, g01, g11);
+	fpoly_LDL_fft(logn, qc(12), qc(8), qc(14));
 
-	/* g00: d00 (hn)
-	   g01: l10 (n)
-	   g11: d11 (hn) */
+	/* Current layout:
+	      0..3     t0
+	      4..7     t1
+	      8..11    l10
+	      12..13   d00 (self-adjoint)
+	      14..15   d11 (self-adjoint)
+	      16..27   free space  */
 
-	/* Split d11 and make right sub-tree:
-	     d11 -> right_00, right_01
-	     right_11 should be a copy of right_00 (in a separate buffer)
-	   We need to keep d00 and l10. */
-	fpr *w0 = tmp;
-	fpr *w1 = w0 + hn;
-	fpoly_split_selfadj_fft(logn, w1, w0, g11);
-	memcpy(g11, w1, qn * sizeof(fpr));
-	memcpy(g11 + qn, w1, qn * sizeof(fpr));
+	/* Split d11 into the right sub-tree (split yields right_00 and
+	   right_01, right_11 is a copy of right_00). */
+	fpoly_split_selfadj_fft(logn, qc(20), qc(18), qc(14));
+	memcpy(qc(21), qc(20), sizeof(fpr) << (logn - 2));
 
-	/* right_00 = g11[0..qn]
-	   right_01 = tmp[0..hn]
-	   right_11 = g11[qn..hn]  */
-	fpr *right_00 = g11;
-	fpr *right_01 = tmp;
-	fpr *right_11 = g11 + qn;
+	/* Current layout:
+	      0..3     t0
+	      4..7     t1
+	      8..11    l10
+	      12..13   d00 (self-adjoint)
+	      14..17   free space
+	      18..19   right_01
+	      20       right_00
+	      21       right_11
+	      22..27   free space  */
 
-	/* We split t1 and use the first recursive call on the two
-	   halves, using the right sub-tree. The result is merged
-	   back into tmp[1.5*n..2.5*n]. */
-	w0 = tmp + hn;
-	w1 = w0 + hn;
-	fpr *w2 = w1 + hn;
-	fpoly_split_fft(logn, w0, w1, t1);
-	ffsamp_fft_inner(ss, logn - 1, w0, w1,
-		right_00, right_01, right_11, w2);
-	fpoly_merge_fft(logn, w2, w0, w1);
+	/* Split t1 and make the first recursive call on the two
+	   halves, using the right sub-tree, then merge the result
+	   into 18..21 */
+	fpoly_split_fft(logn, qc(14), qc(16), qc(4));
+	ffsamp_fft_inner(ss, logn - 1, qc(14));
+	fpoly_merge_fft(logn, qc(18), qc(14), qc(16));
 
-	/* Since we reserved 1.5*n slots before the recursive call at
-	   half degree, total space use in tmp[] is 3*n slots. */
+	/* Current layout:
+	      0..3     t0
+	      4..7     t1
+	      8..11    l10
+	      12..13   d00 (self-adjoint)
+	      14..17   free space
+	      18..21   z1
+	      22..27   free space  */
 
-	/* At this point:
-	     t0 and t1 are unmodified
-	     l10 is in g01
-	     z1 is in tmp[1.5*n..2.5*n]
-	   We compute tb0 = t0 + (t1 - z1)*l10.
-	   tb0 is written over t0.
-	   z1 is moved into t1.
-	   l10 is scratched. */
-	fpr *l10 = g01;
-	fpr *w = tmp;
-	fpr *z1 = w2;
-	memcpy(w, t1, n * sizeof(fpr));
-	fpoly_sub(logn, w, z1);
-	memcpy(t1, z1, n * sizeof(fpr));
-	fpoly_mul_fft(logn, w, l10);
-	fpoly_add(logn, t0, w);
+	/* Compute tb0 = t0 + (t1 - z1)*l10 (into t0) and move z1 into t1. */
+	memcpy(qc(14), qc(4), sizeof(fpr) << logn);
+	fpoly_sub(logn, qc(14), qc(18));
+	memcpy(qc(4), qc(18), sizeof(fpr) << logn);
+	fpoly_mul_fft(logn, qc(14), qc(8));
+	fpoly_add(logn, qc(0), qc(14));
 
-	/* tmp is free
-	   g01 is free
-	   We split g00 to compute the left sub-tree for the second
-	   recursive call. */
-	w0 = g01;
-	w1 = g01 + hn;
-	fpoly_split_selfadj_fft(logn, w0, w1, g00);
-	memcpy(g00, w0, qn * sizeof(fpr));
-	fpr *left_00 = g00;
-	fpr *left_01 = w1;
-	fpr *left_11 = w0;
+	/* Current layout:
+	      0..3     tb0
+	      4..7     z1
+	      8..11    free space
+	      12..13   d00 (self-adjoint)
+	      14..27   free space  */
 
-	/* Second recursive call. */
-	w0 = tmp;
-	w1 = w0 + hn;
-	w2 = w1 + hn;
-	fpoly_split_fft(logn, w0, w1, t0);
-	ffsamp_fft_inner(ss, logn - 1,
-		w0, w1, left_00, left_01, left_11, w2);
-	fpoly_merge_fft(logn, t0, w0, w1);
+	/* Split d00 to obtain the left-subtree. */
+	fpoly_split_selfadj_fft(logn, qc(20), qc(18), qc(12));
+	memcpy(qc(21), qc(20), sizeof(fpr) << (logn - 2));
+
+	/* Current layout:
+	      0..3     tb0
+	      4..7     z1
+	      8..17    free space
+	      18..19   left_01
+	      20       left_00
+	      21       left_11
+	      22..27   free space  */
+
+	/* Split tb0 and perform the second recursive call on the
+	   split output; the final merge produces z0, which we write
+	   into t0. */
+	fpoly_split_fft(logn, qc(14), qc(16), qc(0));
+	ffsamp_fft_inner(ss, logn - 1, qc(14));
+	fpoly_merge_fft(logn, qc(0), qc(14), qc(16));
+
+#undef qc
 }
+#endif
 
 /* see sign_inner.h */
 void
-ffsamp_fft(sampler_state *ss,
-	fpr *t0, fpr *t1, fpr *g00, fpr *g01, fpr *g11, fpr *tmp)
+ffsamp_fft(sampler_state *ss, fpr *tmp)
 {
-	ffsamp_fft_inner(ss, ss->logn, t0, t1, g00, g01, g11, tmp);
+	ffsamp_fft_inner(ss, ss->logn, tmp);
 }

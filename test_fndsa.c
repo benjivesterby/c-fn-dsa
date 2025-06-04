@@ -2658,9 +2658,11 @@ test_sample_f(void)
 /* Defined in test_sampler.c */
 void test_sampler(void);
 
+#if !FNDSA_ASM_CORTEXM4
 /* Defined in test_sign.c */
 void test_chacha20rng(void);
 void test_sign_core(void);
+#endif
 
 static void
 check_keypair(unsigned logn, const uint8_t *skey, const uint8_t *vkey,
@@ -4848,8 +4850,15 @@ run_tests(void)
 	test_fpoly();
 	test_sample_f();
 	test_sampler();
+#if !FNDSA_ASM_CORTEXM4
+	/* We cannot use these tests on ARM Cortex M4 because they override
+	   calls to ffsamp_fft_deepest() through macros, which does not
+	   work with the assembly implementation of ffsamp_fft_inner()
+	   which is used on ARM Cortex M4. The KAT tests (test_kat()) below
+	   are sufficient to ensure that we compute the proper signatures. */
 	test_sign_core();
 	test_chacha20rng();
+#endif
 	test_keygen_ref();
 	test_keygen_self();
 	test_verify();

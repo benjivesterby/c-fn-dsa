@@ -156,54 +156,61 @@ sign_core(unsigned logn,
 		   implementation keeps g01, i.e. the "upper triangle",
 		   omitting g10.
 		   We want the following layout:
-		      g00 g01 g11 b11 b01  */
-		int8_t *f = (int8_t *)tmp + 32 * n;
+		      free space (2n)
+		      g00 (n)
+		      g01 (n)
+		      g11 (n)
+		      b11 (n)
+		      b01 (n)  */
+		int8_t *f = (int8_t *)tmp;
 		int8_t *g = f + n;
 		(void)trim_i8_decode(logn, sign_key_fgF, f, nbits);
 		(void)trim_i8_decode(logn, sign_key_fgF + flen, g, nbits);
-		basis_to_FFT(logn, f, g, F, G, tmp);
-		fpr *b00 = tmp;
+		fpr *t0 = (fpr *)tmp;
+		fpr *t1 = t0 + n;
+		basis_to_FFT(logn, f, g, F, G, t1 + n);
+		fpr *b00 = t1 + n;
 		fpr *b01 = b00 + n;
 		fpr *b10 = b01 + n;
 		fpr *b11 = b10 + n;
-		fpr *t0 = b11 + n;
-		memcpy(t0, b01, n * sizeof(fpr));
+		fpr *t2 = b11 + n;
+		memcpy(t2, b01, n * sizeof(fpr));
 		fpoly_gram_fft(logn, b00, b01, b10, b11);
 
-		/* g00 and g11 are self-adjoint, hence half-size. We
-		   compact them. */
-		fpr *g00 = b00;
-		fpr *g01 = b01;
-		fpr *g11 = b00 + hn;
-		memcpy(g11, b10, hn * sizeof(fpr));
-		b01 = t0;
-
-		/* Current layout:
-		      g00  (hn)
-		      g11  (hn)
-		      g01  (n)
-		      free (n)    <--- t0
-		      b11  (n)    <--- t1
-		      b01  (n)
-		   We now set the target [t0,t1] to [hm,0], then apply the
-		   lattice basis to obtain the real target vector (after
-		   normalization with regard to the modulus q). We want
-		   to store t0 and t1 in, respectively, the "free" and "b11"
-		   spaces. */
-		t0 = b10;
-		fpr *t1 = b11;
-		fpoly_apply_basis(logn, t0, t1, b01, b11, hm);
-
-		/* Current layout:
+		/* We now move things a bit to get the following (taking
+		   into account that g00 and g11 are self-adjoint, hence
+		   half-size):
+		      free space (2n)
+		      g01 (n)
 		      g00 (hn)
 		      g11 (hn)
-		      g01 (n)
+		      free space (n)
+		      b11 (n)
+		      b01 (n)  */
+		fpr *g01 = b00;
+		fpr *g00 = b01;
+		fpr *g11 = b01 + hn;
+		memcpy(t1, b00, hn * sizeof(fpr));
+		memcpy(g01, b01, n * sizeof(fpr));
+		memcpy(g00, t1, hn * sizeof(fpr));
+		memcpy(g11, b10, hn * sizeof(fpr));
+
+		/* We now set the target [t0,t1] to [hm,0], then apply the
+		   lattice basis to obtain the real target vector (after
+		   normalization with regard to the modulus q).
+		   b11 is unchanged, but b01 is in t2. */
+		fpoly_apply_basis(logn, t0, t1, t2, b11, hm);
+
+		/* Current layout:
 		      t0  (n)
 		      t1  (n)
+		      g01 (n)
+		      g00 (hn)
+		      g11 (hn)
 		   We now do the Fast Fourier sampling, which uses
 		   up to 3*n slots beyond t1 (hence 7*n total usage
 		   in tmp[]). */
-		ffsamp_fft(&ss, t0, t1, g00, g01, g11, t1 + n);
+		ffsamp_fft(&ss, tmp);
 
 		/*
 		 * At this point, [t0,t1] are the FFT representation of
@@ -223,7 +230,7 @@ sign_core(unsigned logn,
 		/* Convert [t0, t1] to integers modulo q. */
 		fpoly_iFFT(logn, t0);
 		fpoly_iFFT(logn, t1);
-		uint16_t *ut0 = (uint16_t *)tmp;
+		uint16_t *ut0 = (uint16_t *)(t1 + n);
 		uint16_t *ut1 = ut0 + n;
 		uint16_t *ut2 = ut1 + n;
 		uint16_t *ut3 = ut2 + n;
@@ -284,7 +291,7 @@ sign_core(unsigned logn,
 		mqpoly_int_to_ntt(logn, ut1);
 
 		/* Decode (f,g) from the signing key. */
-		f = (int8_t *)tmp + 32 * n;
+		f = (int8_t *)(ut3 + n);
 		g = f + n;
 		(void)trim_i8_decode(logn, sign_key_fgF, f, nbits);
 		(void)trim_i8_decode(logn, sign_key_fgF + flen, g, nbits);
@@ -340,14 +347,13 @@ sign_core(unsigned logn,
 		      [v0,v1] = [t0,t1] * [[g, -f], [G, -F]]
 		   hence:
 		      v0 = t0*g + t1*G
-		      v1 = -t0*f - t1*F
-		   First 2*n slots of tmp[] are free. */
-		f = (int8_t *)tmp + 32 * n;
+		      v1 = -t0*f - t1*F  */
+		fpr *w0 = t1 + n;
+		fpr *w1 = w0 + n;
+		f = (int8_t *)(w1 + n);
 		g = f + n;
 		(void)trim_i8_decode(logn, sign_key_fgF, f, nbits);
 		(void)trim_i8_decode(logn, sign_key_fgF + flen, g, nbits);
-		fpr *w0 = (fpr *)tmp;
-		fpr *w1 = w0 + n;
 		fpoly_set_small(logn, w0, g);
 		fpoly_set_small(logn, w1, f);
 		fpoly_FFT(logn, w0);
@@ -371,6 +377,7 @@ sign_core(unsigned logn,
 		   with an "overflow" flag in ng. */
 		uint32_t sqn = 0;
 		uint32_t ng = 0;
+		int16_t *s2 = (int16_t *)w0;
 #if FNDSA_SSE2
 		/* We inline an fpr_rint() implementation, using SSE2
 		   intrinsics (_mm_cvtpd_epi32() for rounding to neareast
@@ -390,7 +397,6 @@ sign_core(unsigned logn,
 			sqn += (uint32_t)(z1 * z1);
 			ng |= sqn;
 		}
-		int16_t *s2 = (int16_t *)tmp;
 		for (size_t i = 0; i < n; i += 2) {
 			__m128d xt = _mm_loadu_pd((const double *)t1 + i);
 			__m128i zt = _mm_cvtpd_epi32(xt);
@@ -424,7 +430,6 @@ sign_core(unsigned logn,
 			sqn += (uint32_t)(z1 * z1);
 			ng |= sqn;
 		}
-		int16_t *s2 = (int16_t *)tmp;
 		for (size_t i = 0; i < n; i += 2) {
 			float64x2_t xt = vld1q_f64((const float64_t *)t1 + i);
 			int64x2_t zt = vcvtnq_s64_f64(xt);
@@ -448,7 +453,6 @@ sign_core(unsigned logn,
 			sqn += (uint32_t)(z * z);
 			ng |= sqn;
 		}
-		int16_t *s2 = (int16_t *)tmp;
 		for (size_t i = 0; i < n; i ++) {
 			uint16_t zu = -(uint16_t)f64_rint(tt1[i]);
 			int32_t z = *(int16_t *)&zu;
@@ -463,7 +467,6 @@ sign_core(unsigned logn,
 			sqn += (uint32_t)(z * z);
 			ng |= sqn;
 		}
-		int16_t *s2 = (int16_t *)tmp;
 		for (size_t i = 0; i < n; i ++) {
 			uint16_t zu = -(uint16_t)fpr_rint(t1[i]);
 			int32_t z = *(int16_t *)&zu;
