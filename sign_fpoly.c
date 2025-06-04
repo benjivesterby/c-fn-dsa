@@ -2661,7 +2661,7 @@ fpoly_gram_fft(unsigned logn, fpr *b00, fpr *b01, fpr *b10, const fpr *b11)
 TARGET_SSE2 TARGET_NEON
 void
 fpoly_apply_basis(unsigned logn, fpr *t0, fpr *t1,
-	const fpr *b01, const fpr *b11, const uint16_t *hm)
+	fpr *b01, fpr *b11, const uint16_t *hm)
 {
 	size_t n = (size_t)1 << logn;
 #if FNDSA_SSE2
@@ -2704,9 +2704,9 @@ fpoly_apply_basis(unsigned logn, fpr *t0, fpr *t1,
 	}
 #endif
 	fpoly_FFT(logn, t0);
-	memcpy(t1, t0, n * sizeof(fpr));
-	fpoly_mul_fft(logn, t1, b01);
-	fpoly_mulconst(logn, t1, MINUS_INV_Q);
+	fpoly_mul_fft(logn, b01, t0);
 	fpoly_mul_fft(logn, t0, b11);
+	memmove(t1, b01, n * sizeof(fpr));
+	fpoly_mulconst(logn, t1, MINUS_INV_Q);
 	fpoly_mulconst(logn, t0, INV_Q);
 }

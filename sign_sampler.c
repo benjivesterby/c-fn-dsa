@@ -1215,39 +1215,41 @@ ffsamp_fft_inner(sampler_state *ss, unsigned logn,
 	/* General case: logn >= 2 */
 	size_t n = (size_t)1 << logn;
 	size_t hn = n >> 1;
+	size_t qn = hn >> 1;
+
+	/* Input:
+	     len(g00) = hn
+	     len(g01) = n
+	     len(g11) = hn  */
 
 	/* Decompose G into LDL; the decomposed matrix replaces G. */
 	fpoly_LDL_fft(logn, g00, g01, g11);
 
-	/* Split d00 and d11 (currently in g00 and g11) and expand them
-	   into half-size quasi-cyclic Gram matrices. We also save l10
-	   (currently in g01) into tmp. */
+	/* g00: d00 (hn)
+	   g01: l10 (n)
+	   g11: d11 (hn) */
+
+	/* Split d11 and make right sub-tree:
+	     d11 -> right_00, right_01
+	     right_11 should be a copy of right_00 (in a separate buffer)
+	   We need to keep d00 and l10. */
 	fpr *w0 = tmp;
 	fpr *w1 = w0 + hn;
-	fpoly_split_selfadj_fft(logn, w0, w1, g00);
-	memcpy(g00, w0, n * sizeof(fpr));
-	fpoly_split_selfadj_fft(logn, w0, w1, g11);
-	memcpy(g11, w0, n * sizeof(fpr));
-	memcpy(tmp, g01, n * sizeof(fpr));
-	memcpy(g01, g00, hn * sizeof(fpr));
-	memcpy(g01 + hn, g11, hn * sizeof(fpr));
+	fpoly_split_selfadj_fft(logn, w1, w0, g11);
+	memcpy(g11, w1, qn * sizeof(fpr));
+	memcpy(g11 + qn, w1, qn * sizeof(fpr));
 
-	/* The half-size Gram matrices for the recursive LDL tree
-	   exploration are now:
-	     - left sub-tree:   g00[0..hn], g00[hn..n], g01[0..hn]
-	     - right sub-tree:  g11[0..hn], g11[hn..n], g01[hn..n]
-	   l10 is in tmp[0..n]. */
-	fpr *left_00 = g00;
-	fpr *left_01 = g00 + hn;
+	/* right_00 = g11[0..qn]
+	   right_01 = tmp[0..hn]
+	   right_11 = g11[qn..hn]  */
 	fpr *right_00 = g11;
-	fpr *right_01 = g11 + hn;
-	fpr *left_11 = g01;
-	fpr *right_11 = g01 + hn;
+	fpr *right_01 = tmp;
+	fpr *right_11 = g11 + qn;
 
 	/* We split t1 and use the first recursive call on the two
 	   halves, using the right sub-tree. The result is merged
-	   back into tmp[2*n..3*n]. */
-	w0 = tmp + n;
+	   back into tmp[1.5*n..2.5*n]. */
+	w0 = tmp + hn;
 	w1 = w0 + hn;
 	fpr *w2 = w1 + hn;
 	fpoly_split_fft(logn, w0, w1, t1);
@@ -1255,26 +1257,39 @@ ffsamp_fft_inner(sampler_state *ss, unsigned logn,
 		right_00, right_01, right_11, w2);
 	fpoly_merge_fft(logn, w2, w0, w1);
 
+	/* Since we reserved 1.5*n slots before the recursive call at
+	   half degree, total space use in tmp[] is 3*n slots. */
+
 	/* At this point:
 	     t0 and t1 are unmodified
-	     l10 is in tmp[0..n]
-	     z1 is in tmp[2*n..3*n]
+	     l10 is in g01
+	     z1 is in tmp[1.5*n..2.5*n]
 	   We compute tb0 = t0 + (t1 - z1)*l10.
 	   tb0 is written over t0.
 	   z1 is moved into t1.
 	   l10 is scratched. */
-	fpr *l10 = tmp;
-	fpr *w = l10 + n;
-	fpr *z1 = w + n;
+	fpr *l10 = g01;
+	fpr *w = tmp;
+	fpr *z1 = w2;
 	memcpy(w, t1, n * sizeof(fpr));
 	fpoly_sub(logn, w, z1);
 	memcpy(t1, z1, n * sizeof(fpr));
-	fpoly_mul_fft(logn, l10, w);
-	fpoly_add(logn, t0, l10);
+	fpoly_mul_fft(logn, w, l10);
+	fpoly_add(logn, t0, w);
 
-	/* Second recursive invocation, on the split tb0 (currently in t0),
-	   using the left sub-tree.
-	   tmp is free. */
+	/* tmp is free
+	   g01 is free
+	   We split g00 to compute the left sub-tree for the second
+	   recursive call. */
+	w0 = g01;
+	w1 = g01 + hn;
+	fpoly_split_selfadj_fft(logn, w0, w1, g00);
+	memcpy(g00, w0, qn * sizeof(fpr));
+	fpr *left_00 = g00;
+	fpr *left_01 = w1;
+	fpr *left_11 = w0;
+
+	/* Second recursive call. */
 	w0 = tmp;
 	w1 = w0 + hn;
 	w2 = w1 + hn;

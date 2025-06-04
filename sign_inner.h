@@ -464,6 +464,8 @@ f64_of(int64_t x)
 	return d;
 }
 
+#define f64_of32(x)   f64_of((int64_t)(x))
+
 static inline int64_t
 f64_rint(f64 a)
 {
@@ -591,11 +593,12 @@ void fpoly_gram_fft(unsigned logn,
 
 /* Given matrix B = [[b00, b01], [b10, b11]], compute the target vector
    [t0,t1] = (1/q)*B*[0,hm], for polynomial hm with coefficients in [0,q-1].
-   Only b01 and b11 are needed. hm is in normal representation; all other
+   Only b01 and b11 are needed. b01 and b11 are consumed. t1 may be the
+   same pointer as b11. hm is in normal representation; all other
    polynomials are in FFT representation. */
 #define fpoly_apply_basis   fndsa_fpoly_apply_basis
 void fpoly_apply_basis(unsigned logn, fpr *t0, fpr *t1,
-	const fpr *b01, const fpr *b11, const uint16_t *hm);
+	fpr *b01, fpr *b11, const uint16_t *hm);
 
 /* ==================================================================== */
 /*
@@ -645,7 +648,8 @@ void ffsamp_fft(sampler_state *ss,
  * Internal signing function.
  */
 
-/* Internal signing function. The complete signing key (f,g,F,G) is
+/* Internal signing function. The complete signing key (encoded for f,
+   g and F, but skipping the leading header byte, and decoded for G) is
    provided, as well as the hashed verifying key, data to sign (context,
    id, hash value), the random seed to work on (optional), the signature
    output buffer, and the temporary area. The signature buffer has been
@@ -655,10 +659,10 @@ void ffsamp_fft(sampler_state *ss,
    Returned value is the signature size (in bytes), or 0 on error. An
    error is possible if seed is NULL and the system RNG fails.
 
-   tmp size: 74*n bytes  */
+   tmp size: 58*n bytes  */
 #define sign_core   fndsa_sign_core
 size_t sign_core(unsigned logn,
-	const int8_t *f, const int8_t *g, const int8_t *F, const int8_t *G,
+	const uint8_t *sign_key_fgF, const int8_t *G,
 	const uint8_t *hashed_vk, const uint8_t *ctx, size_t ctx_len,
 	const char *id, const uint8_t *hv, size_t hv_len,
 	const uint8_t *seed, size_t seed_len, uint8_t *sig, void *tmp);

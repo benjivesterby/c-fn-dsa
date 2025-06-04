@@ -665,7 +665,12 @@ test_sign_core(void)
 	fflush(stdout);
 
 	uint8_t *sig = xmalloc(FNDSA_SIGNATURE_SIZE(9));
-	void *tmp = xmalloc((size_t)78 * 512 + 31);
+	void *tmp = xmalloc((size_t)59 * 512 + 31);
+
+	uint8_t *fgF = xmalloc((512 * (6 + 6 + 8)) >> 3);
+	(void)trim_i8_encode(9, KAT_512_f, 6, fgF);
+	(void)trim_i8_encode(9, KAT_512_g, 6, fgF + ((512 * 6) >> 3));
+	memcpy(fgF + ((512 * (6 + 6)) >> 3), KAT_512_F, 512);
 
 	shake_context *sc = xmalloc(sizeof *sc);
 	shake_init(sc, 256);
@@ -674,7 +679,8 @@ test_sign_core(void)
 	uint8_t *hashed_vk = xmalloc(64);
 	shake_extract(sc, hashed_vk, 64);
 	size_t j = sign_core(9,
-		KAT_512_f, KAT_512_g, KAT_512_F, KAT_512_G,
+		fgF, KAT_512_G,
+		// KAT_512_f, KAT_512_g, KAT_512_F, KAT_512_G,
 		hashed_vk, NULL, 0, "\xFF", (const uint8_t *)"data1", 5,
 		KAT_512_RND, sizeof KAT_512_RND, sig, tmp);
 	if (j != FNDSA_SIGNATURE_SIZE(9)) {
@@ -704,6 +710,7 @@ test_sign_core(void)
 	}
 
 	xfree(sig);
+	xfree(fgF);
 	xfree(tmp);
 	xfree(sc);
 	xfree(hashed_vk);

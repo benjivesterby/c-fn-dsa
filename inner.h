@@ -565,9 +565,12 @@ int comp_decode(unsigned logn, const uint8_t *d, size_t dlen, int16_t *s);
 #define mqpoly_mul_ntt                fndsa_mqpoly_mul_ntt
 #define mqpoly_div_ntt                fndsa_mqpoly_div_ntt
 #define mqpoly_sub                    fndsa_mqpoly_sub
+#define mqpoly_add                    fndsa_mqpoly_add
 #define mqpoly_is_invertible          fndsa_mqpoly_is_invertible
 #define mqpoly_div_small              fndsa_mqpoly_div_small
 #define mqpoly_sqnorm_ext             fndsa_mqpoly_sqnorm_ext
+#define mqpoly_sqnorm_int             fndsa_mqpoly_sqnorm_int
+#define mqpoly_sqnorm_int_to_signed   fndsa_mqpoly_sqnorm_int_to_signed
 #define mqpoly_sqnorm_signed          fndsa_mqpoly_sqnorm_signed
 #define mqpoly_sqnorm_is_acceptable   fndsa_mqpoly_sqnorm_is_acceptable
 #define mq_GM                         fndsa_mq_GM
@@ -617,6 +620,10 @@ int mqpoly_div_ntt(unsigned logn, uint16_t *a, const uint16_t *b);
    representation, or both must be in ntt representation). */
 void mqpoly_sub(unsigned logn, uint16_t *a, const uint16_t *b);
 
+/* Add polynomial b to polynomial a (both must be in int
+   representation, or both must be in ntt representation). */
+void mqpoly_add(unsigned logn, uint16_t *a, const uint16_t *b);
+
 /* Check whether the small polynomial f is invertible. tmp[] must
    have n elements. Returned value is 1 if invertible, 0 otherwise. */
 int mqpoly_is_invertible(unsigned logn, const int8_t *f, uint16_t *tmp);
@@ -627,10 +634,27 @@ int mqpoly_is_invertible(unsigned logn, const int8_t *f, uint16_t *tmp);
 void mqpoly_div_small(unsigned logn, const int8_t *g, const int8_t *f,
 	uint16_t *h, uint16_t *tmp);
 
+/* Compute the squared norm of a polynomial (in internal representation).
+   The squared norm includes an implicit normalization to [-q/2,+q/2].
+   If the value exceeds 2^31-1 then 2^32-1 is returned. */
+uint32_t mqpoly_sqnorm_int(unsigned logn, const uint16_t *a);
+
 /* Compute the squared norm of a polynomial (in external representation).
    The squared norm includes an implicit normalization to [-q/2,+q/2].
    If the value exceeds 2^31-1 then 2^32-1 is returned. */
-uint32_t mqpoly_sqnorm_ext(unsigned logn, const uint16_t *a);
+static inline uint32_t
+mqpoly_sqnorm_ext(unsigned logn, const uint16_t *a)
+{
+	/* Implementation with internal representation is compatible with
+	   external representation. */
+	return mqpoly_sqnorm_int(logn, a);
+}
+
+/* Convert (in-place) a polynomial from internal representation to signed
+   representation with normalization to [-q/2,+q/2]. The squared norm
+   is also computed and returned; if its value exceeds 2^31-1 then 2^32-1
+   is returned. */
+uint32_t mqpoly_sqnorm_int_to_signed(unsigned logn, uint16_t *a);
 
 /* Compute the squared norm of a polynomial (in signed representation).
    Since the signed representation assumes that all coefficients are

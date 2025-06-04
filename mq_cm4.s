@@ -254,6 +254,48 @@ fndsa_mqpoly_sub__L1:
 	.size	fndsa_mqpoly_sub,.-fndsa_mqpoly_sub
 
 @ =======================================================================
+@ void fndsa_mqpoly_add(unsigned logn, uint16_t *a, const uint16_t *b)
+@ =======================================================================
+
+	.align	2
+	.global	fndsa_mqpoly_add
+	.thumb
+	.thumb_func
+	.type	fndsa_mqpoly_add, %function
+fndsa_mqpoly_add:
+	push.w	{ r4, r5, r6, r7, lr }
+	movs	r3, #1
+	lsls	r3, r0
+
+	@ r14 <- q (both halves)
+	movw	r14, #Q
+	movt	r14, #Q
+
+fndsa_mqpoly_add__L1:
+	@ Four ldr are faster than two ldrd or two ldm.
+	ldr	r4, [r1]
+	ldr	r5, [r1, #4]
+	ldr.w	r6, [r2], #4
+	ldr.w	r7, [r2], #4
+
+	@ We do the addition over the integers, then subtract q, but
+	@ discard the subtraction if the result is negative.
+	sadd16	r4, r4, r6
+	ssub16	r12, r4, r14
+	sel	r4, r12, r4
+	str.w	r4, [r1], #4
+	sadd16	r5, r5, r7
+	ssub16	r12, r5, r14
+	sel	r5, r12, r5
+	str.w	r5, [r1], #4
+
+	subs	r3, #4
+	bne	fndsa_mqpoly_add__L1
+
+	pop	{ r4, r5, r6, r7, pc }
+	.size	fndsa_mqpoly_add,.-fndsa_mqpoly_add
+
+@ =======================================================================
 @ uint32_t fndsa_mqpoly_sqnorm_signed(unsigned logn, const uint16_t *a)
 @ =======================================================================
 
@@ -284,15 +326,15 @@ fndsa_mqpoly_sqnorm_signed__L1:
 	.size	fndsa_mqpoly_sqnorm_signed,.-fndsa_mqpoly_sqnorm_signed
 
 @ =======================================================================
-@ uint32_t fndsa_mqpoly_sqnorm_ext(unsigned logn, const uint16_t *a)
+@ uint32_t fndsa_mqpoly_sqnorm_int(unsigned logn, const uint16_t *a)
 @ =======================================================================
 
 	.align	2
-	.global	fndsa_mqpoly_sqnorm_ext
+	.global	fndsa_mqpoly_sqnorm_int
 	.thumb
 	.thumb_func
-	.type	fndsa_mqpoly_sqnorm_ext, %function
-fndsa_mqpoly_sqnorm_ext:
+	.type	fndsa_mqpoly_sqnorm_int, %function
+fndsa_mqpoly_sqnorm_int:
 	push.w	{ r4, r5, r6, r7 }
 	movs	r3, #1
 	lsls	r3, r0
@@ -307,7 +349,7 @@ fndsa_mqpoly_sqnorm_ext:
 	movw	r0, #0
 	@ We clear the Q flag, which we will use to detect overflows.
 	msr	APSR_nzcvq, r0
-fndsa_mqpoly_sqnorm_ext__L1:
+fndsa_mqpoly_sqnorm_int__L1:
 	@ We can use ldrd because the caller ensured that the input is
 	@ aligned.
 	ldrd	r2, r4, [r1], #8
@@ -324,7 +366,7 @@ fndsa_mqpoly_sqnorm_ext__L1:
 	smlad	r0, r2, r2, r0
 	smlad	r0, r4, r4, r0
 	subs	r3, #4
-	bne	fndsa_mqpoly_sqnorm_ext__L1
+	bne	fndsa_mqpoly_sqnorm_int__L1
 
 	@ If the Q flag is set, saturate the returned value to 0xFFFFFFFF
 	mrs	r1, APSR
@@ -333,7 +375,62 @@ fndsa_mqpoly_sqnorm_ext__L1:
 
 	pop	{ r4, r5, r6, r7 }
 	bx	lr
-	.size	fndsa_mqpoly_sqnorm_ext,.-fndsa_mqpoly_sqnorm_ext
+	.size	fndsa_mqpoly_sqnorm_int,.-fndsa_mqpoly_sqnorm_int
+
+@ =======================================================================
+@ uint32_t fndsa_mqpoly_sqnorm_int_to_signed(unsigned logn, uint16_t *a)
+@ =======================================================================
+
+	.align	2
+	.global	fndsa_mqpoly_sqnorm_int_to_signed
+	.thumb
+	.thumb_func
+	.type	fndsa_mqpoly_sqnorm_int_to_signed, %function
+fndsa_mqpoly_sqnorm_int_to_signed:
+	push.w	{ r4, r5, r6, r7 }
+	movs	r3, #1
+	lsls	r3, r0
+
+	@ r5 <- q (in both halves)
+	movw	r5, #Q
+	movt	r5, #Q
+	@ r6 <- ceil(q/2) (in both halves)
+	movw	r6, #((Q + 1) >> 1)
+	movt	r6, #((Q + 1) >> 1)
+
+	movw	r0, #0
+	@ We clear the Q flag, which we will use to detect overflows.
+	msr	APSR_nzcvq, r0
+fndsa_mqpoly_sqnorm_int_to_signed__L1:
+	@ We can use ldrd because the caller ensured that the input is
+	@ aligned.
+	ldrd	r2, r4, [r1]
+
+	@ Normalize values to [-q/2,+q/2]
+	ssub16	r7, r2, r5
+	ssub16	r12, r2, r6
+	sel	r2, r7, r2
+	str	r2, [r1], #4
+	ssub16	r7, r4, r5
+	ssub16	r12, r4, r6
+	sel	r4, r7, r4
+	str	r4, [r1], #4
+
+	@ If any addition overflows (signed interpretation), then the Q
+	@ flag will be set.
+	smlad	r0, r2, r2, r0
+	smlad	r0, r4, r4, r0
+	subs	r3, #4
+	bne	fndsa_mqpoly_sqnorm_int_to_signed__L1
+
+	@ If the Q flag is set, saturate the returned value to 0xFFFFFFFF
+	mrs	r1, APSR
+	sbfx	r1, r1, #27, #1
+	orrs	r0, r1
+
+	pop	{ r4, r5, r6, r7 }
+	bx	lr
+	.size	fndsa_mqpoly_sqnorm_int_to_signed,.-fndsa_mqpoly_sqnorm_int_to_signed
 
 @ =======================================================================
 @ void fndsa_mqpoly_int_to_ntt(unsigned logn, uint16_t *d)

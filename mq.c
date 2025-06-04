@@ -937,6 +937,18 @@ mqpoly_sub(unsigned logn, uint16_t *a, const uint16_t *b)
 }
 #endif
 
+#if !FNDSA_ASM_CORTEXM4
+/* see inner.h */
+void
+mqpoly_add(unsigned logn, uint16_t *a, const uint16_t *b)
+{
+	size_t n = (size_t)1 << logn;
+	for (size_t i = 0; i < n; i ++) {
+		a[i] = (uint16_t)mq_add(a[i], b[i]);
+	}
+}
+#endif
+
 #if FNDSA_AVX2
 TARGET_AVX2
 void
@@ -1038,7 +1050,7 @@ avx2_mqpoly_div_small(unsigned logn, const int8_t *g, const int8_t *f,
 #if !FNDSA_ASM_CORTEXM4
 /* see inner.h */
 uint32_t
-mqpoly_sqnorm_ext(unsigned logn, const uint16_t *a)
+mqpoly_sqnorm_int(unsigned logn, const uint16_t *a)
 {
 	/*
 	 * The normalized values are at most (q-1)/2 in absolute value,
@@ -1052,6 +1064,33 @@ mqpoly_sqnorm_ext(unsigned logn, const uint16_t *a)
 	for (size_t i = 0; i < n; i ++) {
 		uint32_t x = a[i];
 		x -= Q & ((((Q - 1) >> 1) - x) >> 16);
+		int32_t y = *(int32_t *)&x;
+		s += (uint32_t)(y * y);
+		sat |= s;
+	}
+	s |= -(sat >> 31);
+	return s;
+}
+#endif
+
+#if !FNDSA_ASM_CORTEXM4
+/* see inner.h */
+uint32_t
+mqpoly_sqnorm_int_to_signed(unsigned logn, uint16_t *a)
+{
+	/*
+	 * The normalized values are at most (q-1)/2 in absolute value,
+	 * thus the squares are at most 37748736. If the sum overflows,
+	 * then it must at some point be in [2^31,2^32-1], i.e. with
+	 * the highest bit set.
+	 */
+	size_t n = (size_t)1 << logn;
+	uint32_t s = 0;
+	uint32_t sat = 0;
+	for (size_t i = 0; i < n; i ++) {
+		uint32_t x = a[i];
+		x -= Q & ((((Q - 1) >> 1) - x) >> 16);
+		a[i] = (uint16_t)x;
 		int32_t y = *(int32_t *)&x;
 		s += (uint32_t)(y * y);
 		sat |= s;

@@ -21,10 +21,14 @@ sign_step1(unsigned logn, const uint8_t *sign_key,
 	/* Align tmp to a 32-byte boundary. */
 	tmp = (void *)(((uintptr_t)tmp + 31) & ~(uintptr_t)31);
 
-	int8_t *f = (int8_t *)tmp + ((size_t)74 << logn);
+	/* We decode f, g and F into a temporary area, and use them
+	   to recompute G. Only G will be provided in decoded format
+	   to sign_core(); f, g and F can be redecoded cheaply from
+	   the encoded key when needed. */
+	int8_t *f = (int8_t *)tmp + 4 * n;
 	int8_t *g = f + n;
 	int8_t *F = g + n;
-	int8_t *G = F + n;
+	int8_t *G = (int8_t *)tmp + ((size_t)58 << logn);
 
 	/* Decode the private key. Header byte and length have already
 	   been verified. */
@@ -63,8 +67,8 @@ sign_step1(unsigned logn, const uint8_t *sign_key,
 	      h = g/f mod X^n+1 mod q
 	      G = h*F mod X^n+1 mod q
 	   We also compute the SHAKE256 hash of the verifying key. */
-	uint16_t *t0 = tmp;
-	uint16_t *t1 = t0 + n;
+	uint16_t *t1 = (uint16_t *)tmp;
+	uint16_t *t0 = t1 + n;
 	/* t0 <- h = g/f */
 	mqpoly_small_to_int(logn, g, t0);
 	mqpoly_small_to_int(logn, f, t1);
@@ -89,25 +93,27 @@ sign_step1(unsigned logn, const uint8_t *sign_key,
 	   skip both encoding and hashing. */
 	mqpoly_ntt_to_int(logn, t0);
 	mqpoly_int_to_ext(logn, t0);
-	uint8_t *vrfy_key = (uint8_t *)(t0 + n);
+	uint8_t *vrfy_key = (uint8_t *)t1;
 	vrfy_key[0] = 0x00 + logn;
 	mqpoly_encode(logn, t0, vrfy_key + 1);
 
-	/* We can use tmp (skipping t0 and t1) for the SHAKE256 context.
-	   The buffer currently starts with t0 (2*n bytes) then the
-	   encoded public key (less than 2*n bytes), leaving 70*n bytes,
-	   i.e. at least 280 bytes since n >= 4; the shake_context
-	   structure size is normally 208 bytes, so it fits well. */
+	/* We can use t0 for the SHAKE256 context. The tmp buffer currently
+	   starts with t1 (2*n bytes), which contains the encoded public
+	   key (no more than 2*n bytes), leaging 56*n bytes until the
+	   storage place for G (at tmp + 58*n). With n >= 4, this is at
+	   least 224 bytes; the SHAKE context uses 208 bytes. Moreover,
+	   tmp + 2*n is at least 8-byte aligned. */
 	uint8_t hashed_key[64];
-	shake_context *sc = (shake_context *)(t0 + 2 * n);
+	shake_context *sc = (shake_context *)t0;
 	shake_init(sc, 256);
 	shake_inject(sc, vrfy_key, FNDSA_VRFY_KEY_SIZE(logn));
 	shake_flip(sc);
 	shake_extract(sc, hashed_key, sizeof hashed_key);
 
-	/* We now have f, g, F and G decoded and verified. Hashed public
-	   key is in hashed_key[]. We can proceed to the main signing loop. */
-	return sign_core(logn, f, g, F, G, hashed_key,
+	/* We now have G, and we checked that f, g and F can be decoded
+	   successfully (no out-of-range element). Hashed public key is in
+	   hashed_key[]. We can proceed to the main signing loop. */
+	return sign_core(logn, sign_key + 1, G, hashed_key,
 		ctx, ctx_len, id, hv, hv_len,
 		seed, seed_len, sig, tmp);
 
@@ -128,7 +134,7 @@ sign_step1(unsigned logn, const uint8_t *sign_key,
 		const uint8_t *seed, size_t seed_len, \
 		uint8_t *sig) \
 	{ \
-		uint8_t tmp[(sz) * 78 + 31]; \
+		uint8_t tmp[(sz) * 59 + 31]; \
 		return sign_step1(logn, \
 			sign_key, ctx, ctx_len, id, hv, hv_len, \
 			seed, seed_len, sig, tmp); \
@@ -208,7 +214,7 @@ sign_wrapper(int weak,
 				seed, seed_len, sig);
 		}
 	} else {
-		if (tmp_len < (((size_t)78 << logn) + 31)) {
+		if (tmp_len < (((size_t)59 << logn) + 31)) {
 			return 0;
 		}
 		return sign_step1(logn,

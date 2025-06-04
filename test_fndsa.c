@@ -4332,7 +4332,7 @@ test_self(void)
 		uint8_t *vk = xmalloc(vk_len);
 		uint8_t *sig = xmalloc(sig_len);
 		size_t kgentmp_len = ((size_t)26 << logn) + 31;
-		size_t signtmp_len = ((size_t)78 << logn) + 31;
+		size_t signtmp_len = ((size_t)59 << logn) + 31;
 		size_t vrfytmp_len = ((size_t)4 << logn) + 31;
 		void *tmp = xmalloc(signtmp_len);
 		for (int i = 0; i < 10; i ++) {
@@ -4675,7 +4675,7 @@ inner_test_kat(unsigned logn, const char *const kat[])
 	uint8_t *vk = xmalloc(vk_len);
 	uint8_t *sig = xmalloc(sig_len);
 	size_t kgentmp_len = ((size_t)26 << logn) + 31;
-	size_t signtmp_len = ((size_t)78 << logn) + 31;
+	size_t signtmp_len = ((size_t)59 << logn) + 31;
 	size_t vrfytmp_len = ((size_t)4 << logn) + 31;
 	void *tmp = xmalloc(signtmp_len);
 	sha3_context *sc = xmalloc(sizeof *sc);
@@ -4861,7 +4861,7 @@ run_tests(void)
 static uint8_t m4stack_skey[FNDSA_SIGN_KEY_SIZE(10)];
 static uint8_t m4stack_vkey[FNDSA_VRFY_KEY_SIZE(10)];
 static uint8_t m4stack_sig[FNDSA_SIGNATURE_SIZE(10)];
-static uint8_t m4stack_tmp[((size_t)78 << 10) + 31];
+static uint8_t m4stack_tmp[((size_t)59 << 10) + 31];
 
 NOINLINE
 void

@@ -231,18 +231,18 @@ size_t fndsa_sign_seeded(const void *sign_key, size_t sign_key_len,
  *
  *    logn   min tmp_len   security
  *   -----------------------------------------
- *      9      39967       standard (level I)
- *     10      79903       standard (level V)
+ *      9      30239       standard (level I)
+ *     10      60447       standard (level V)
  *
- *      2        343       none
- *      3        655       none
- *      4       1279       none
- *      5       2527       none
- *      6       5023       none
- *      7      10015       very weak
- *      8      19999       presumed weak
+ *      2        267       none
+ *      3        503       none
+ *      4        975       none
+ *      5       1919       none
+ *      6       3807       none
+ *      7       7583       very weak
+ *      8      15135       presumed weak
  *
- * (Formula is: 78*n+31 bytes, for degree n = 2^logn)
+ * (Formula is: 59*n+31 bytes, for degree n = 2^logn)
  *
  * An undersized temporary area triggers an error (returned value is zero).
  */

@@ -33,7 +33,7 @@ basis_to_FFT(unsigned logn,
 TARGET_SSE2 TARGET_NEON
 size_t
 sign_core(unsigned logn,
-	const int8_t *f, const int8_t *g, const int8_t *F, const int8_t *G,
+	const uint8_t *sign_key_fgF, const int8_t *G,
 	const uint8_t *hashed_vk, const uint8_t *ctx, size_t ctx_len,
 	const char *id, const uint8_t *hv, size_t hv_len,
 	const uint8_t *seed, size_t seed_len, uint8_t *sig, void *tmp)
@@ -56,6 +56,25 @@ sign_core(unsigned logn,
 	   generation). */
 
 	size_t n = (size_t)1 << logn;
+	size_t hn = n >> 1;
+	unsigned nbits;
+	switch (logn) {
+	case 2: case 3: case 4: case 5:
+		nbits = 8;
+		break;
+	case 6: case 7:
+		nbits = 7;
+		break;
+	case 8: case 9:
+		nbits = 6;
+		break;
+	default:
+		nbits = 5;
+		break;
+	}
+	/* Storage format of F is already an array of int8_t. */
+	size_t flen = (nbits << logn) >> 3;
+	int8_t *F = (int8_t *)(sign_key_fgF + (flen << 1));
 
 	/* The special hash identifier consisting of a byte of value 0xFF
 	   followed by a zero denotes the original Falcon algorithm, which
@@ -101,7 +120,10 @@ sign_core(unsigned logn,
 		} else if (orig_falcon && counter == 0 && seed_len == rndlen) {
 			memcpy(rndp, seed, rndlen);
 		} else {
-			/* We can use the tmp buffer for the SHAKE context. */
+			/* We can use the tmp buffer for the SHAKE context.
+			   It even works at n = 4 (logn = 2) because there
+			   are 58*4 = 232 bytes free in tmp[] at this point,
+			   and we need only 208. */
 			shake_context *sc = (shake_context *)tmp;
 			shake_init(sc, 256);
 			shake_inject(sc, seed, seed_len);
@@ -116,7 +138,7 @@ sign_core(unsigned logn,
 		}
 
 		/* Hash the message into a polynomial. */
-		uint16_t *hm = (uint16_t *)((uint8_t *)tmp + 72 * n);
+		uint16_t *hm = (uint16_t *)((uint8_t *)tmp + 56 * n);
 		hash_to_point(logn, nonce, hashed_vk,
 			ctx, ctx_len, id, hv, hv_len, hm);
 
@@ -135,6 +157,10 @@ sign_core(unsigned logn,
 		   omitting g10.
 		   We want the following layout:
 		      g00 g01 g11 b11 b01  */
+		int8_t *f = (int8_t *)tmp + 32 * n;
+		int8_t *g = f + n;
+		(void)trim_i8_decode(logn, sign_key_fgF, f, nbits);
+		(void)trim_i8_decode(logn, sign_key_fgF + flen, g, nbits);
 		basis_to_FFT(logn, f, g, F, G, tmp);
 		fpr *b00 = tmp;
 		fpr *b01 = b00 + n;
@@ -144,57 +170,199 @@ sign_core(unsigned logn,
 		memcpy(t0, b01, n * sizeof(fpr));
 		fpoly_gram_fft(logn, b00, b01, b10, b11);
 
-		/* Layout:
-		      g00 g01 g11 b11 b01 t0 t1  */
+		/* g00 and g11 are self-adjoint, hence half-size. We
+		   compact them. */
 		fpr *g00 = b00;
 		fpr *g01 = b01;
-		fpr *g11 = b10;
+		fpr *g11 = b00 + hn;
+		memcpy(g11, b10, hn * sizeof(fpr));
 		b01 = t0;
-		t0 = b01 + n;
-		fpr *t1 = t0 + n;
 
-		/* Set the target [t0,t1] to [hm,0], then apply the lattice
-		   basis to obtain the real target vector (after normalization
-		   with regard to the modulus q). */
+		/* Current layout:
+		      g00  (hn)
+		      g11  (hn)
+		      g01  (n)
+		      free (n)    <--- t0
+		      b11  (n)    <--- t1
+		      b01  (n)
+		   We now set the target [t0,t1] to [hm,0], then apply the
+		   lattice basis to obtain the real target vector (after
+		   normalization with regard to the modulus q). We want
+		   to store t0 and t1 in, respectively, the "free" and "b11"
+		   spaces. */
+		t0 = b10;
+		fpr *t1 = b11;
 		fpoly_apply_basis(logn, t0, t1, b01, b11, hm);
 
-		/* We can now discard b01 and b11; we move back [t0,t1]. */
-		memmove(b11, t0, 2 * n * sizeof(fpr));
-		t0 = g11 + n;
-		t1 = t0 + n;
-
-		/* Layout:
-		      g00 g01 g11 t0 t1
-		   We now do the Fast Fourier sampling. */
+		/* Current layout:
+		      g00 (hn)
+		      g11 (hn)
+		      g01 (n)
+		      t0  (n)
+		      t1  (n)
+		   We now do the Fast Fourier sampling, which uses
+		   up to 3*n slots beyond t1 (hence 7*n total usage
+		   in tmp[]). */
 		ffsamp_fft(&ss, t0, t1, g00, g01, g11, t1 + n);
 
-		/* Rearrange layout back to:
-		      b00 b01 b10 b11 t0 t1  */
-		memmove((fpr *)tmp + 4 * n, (fpr *)tmp + 3 * n,
-			2 * n * sizeof(fpr));
-		basis_to_FFT(logn, f, g, F, G, tmp);
-		b00 = tmp;
-		b01 = b00 + n;
-		b10 = b01 + n;
-		b11 = b10 + n;
-		t0 = b11 + n;
-		t1 = t0 + n;
-		fpr *tx = t1 + n;
-		fpr *ty = tx + n;
+		/*
+		 * At this point, [t0,t1] are the FFT representation of
+		 * the sampled vector; in normal (non-FFT) representation,
+		 * [t0,t1] is integral. We want to apply the lattice basis
+		 * Compute the lattice basis B = [[g, -f], [G, -F]] to that
+		 * vector, and subtract the result from [hm,0] to get the
+		 * signature value. These computations can be done either
+		 * in the FFT domain, or in with integers; and integer
+		 * computations can be done modulo q = 12289 since the
+		 * signature verification also works modulo q. Using
+		 * integers is faster than staying in FFT representation
+		 * when floating-point operations are emulated.
+		 */
+#if !(FNDSA_SSE2 || FNDSA_NEON || FNDSA_RV64D)
+
+		/* Convert [t0, t1] to integers modulo q. */
+		fpoly_iFFT(logn, t0);
+		fpoly_iFFT(logn, t1);
+		uint16_t *ut0 = (uint16_t *)tmp;
+		uint16_t *ut1 = ut0 + n;
+		uint16_t *ut2 = ut1 + n;
+		uint16_t *ut3 = ut2 + n;
+#if FNDSA_SSE2
+		/* We inline an fpr_rint() implementation, using SSE2
+		   intrinsics (_mm_cvtpd_epi32() for rounding to neareast
+		   with roundTiesToEven). */
+		for (size_t i = 0; i < n; i += 2) {
+			__m128d xt = _mm_loadu_pd((const double *)t0 + i);
+			__m128i zt = _mm_cvtpd_epi32(xt);
+			ut0[i + 0] = (uint16_t)_mm_cvtsi128_si32(zt);
+			ut0[i + 1] = (uint16_t)_mm_cvtsi128_si32(
+				_mm_bsrli_si128(zt, 4));
+		}
+		for (size_t i = 0; i < n; i += 2) {
+			__m128d xt = _mm_loadu_pd((const double *)t1 + i);
+			__m128i zt = _mm_cvtpd_epi32(xt);
+			ut1[i + 0] = (uint16_t)_mm_cvtsi128_si32(zt);
+			ut1[i + 1] = (uint16_t)_mm_cvtsi128_si32(
+				_mm_bsrli_si128(zt, 4));
+		}
+#elif FNDSA_NEON
+		/* We inline an fpr_rint() implementation, using NEON
+		   intrinsics (vcvtnq_s64_f64() for rounding to neareast
+		   with roundTiesToEven). */
+		for (size_t i = 0; i < n; i += 2) {
+			float64x2_t xt = vld1q_f64((const float64_t *)t0 + i);
+			int64x2_t zt = vcvtnq_s64_f64(xt);
+			ut0[i + 0] = (uint16_t)vgetq_lane_s64(zt, 0);
+			ut0[i + 1] = (uint16_t)vgetq_lane_s64(zt, 1);
+		}
+		for (size_t i = 0; i < n; i += 2) {
+			float64x2_t xt = vld1q_f64((const float64_t *)t1 + i);
+			int64x2_t zt = vcvtnq_s64_f64(xt);
+			ut1[i + 0] = (uint16_t)vgetq_lane_s64(zt, 0);
+			ut1[i + 1] = (uint16_t)vgetq_lane_s64(zt, 1);
+		}
+#elif FNDSA_RV64D
+		const f64 *tt0 = (const f64 *)t0;
+		const f64 *tt1 = (const f64 *)t1;
+		for (size_t i = 0; i < n; i ++) {
+			ut0[i] = (uint64_t)f64_rint(tt0[i]);
+		}
+		for (size_t i = 0; i < n; i ++) {
+			ut1[i] = (uint64_t)f64_rint(tt1[i]);
+		}
+#else
+		for (size_t i = 0; i < n; i ++) {
+			ut0[i] = (uint16_t)fpr_rint(t0[i]);
+			ut1[i] = (uint16_t)fpr_rint(t1[i]);
+		}
+#endif
+		mqpoly_signed_to_int(logn, ut0);
+		mqpoly_signed_to_int(logn, ut1);
+
+		/* Convert [t0,t1] to NTT. */
+		mqpoly_int_to_ntt(logn, ut0);
+		mqpoly_int_to_ntt(logn, ut1);
+
+		/* Decode (f,g) from the signing key. */
+		f = (int8_t *)tmp + 32 * n;
+		g = f + n;
+		(void)trim_i8_decode(logn, sign_key_fgF, f, nbits);
+		(void)trim_i8_decode(logn, sign_key_fgF + flen, g, nbits);
+
+		/* s1 = hm - (g*t0 + G*t1).
+		   We compute s1 into ut3; we do not need to keep s1,
+		   only its squared norm. */
+		mqpoly_small_to_int(logn, g, ut2);
+		mqpoly_small_to_int(logn, G, ut3);
+		mqpoly_int_to_ntt(logn, ut2);
+		mqpoly_int_to_ntt(logn, ut3);
+		mqpoly_mul_ntt(logn, ut2, ut0);
+		mqpoly_mul_ntt(logn, ut3, ut1);
+		mqpoly_add(logn, ut2, ut3);
+		mqpoly_ntt_to_int(logn, ut2);
+		memcpy(ut3, hm, n * sizeof(uint16_t));
+		mqpoly_ext_to_int(logn, ut3);
+		mqpoly_sub(logn, ut3, ut2);
+		uint32_t sqn1 = mqpoly_sqnorm_int(logn, ut3);
+
+		/* s2 = -(-f*t0 - F*t1) = f*t0 + F*t1
+		   We compute s2 into ut3. */
+		mqpoly_small_to_int(logn, f, ut2);
+		mqpoly_small_to_int(logn, F, ut3);
+		mqpoly_int_to_ntt(logn, ut2);
+		mqpoly_int_to_ntt(logn, ut3);
+		mqpoly_mul_ntt(logn, ut2, ut0);
+		mqpoly_mul_ntt(logn, ut3, ut1);
+		mqpoly_add(logn, ut3, ut2);
+		mqpoly_ntt_to_int(logn, ut3);
+		uint32_t sqn2 = mqpoly_sqnorm_int_to_signed(logn, ut3);
+
+		/* If either squared norm saturated, or the sum (i.e.
+		   the total squared norm of [s1,s2]) is too high, then
+		   we loop. */
+		uint32_t sqn = sqn1 + sqn2;
+		sqn1 |= sqn2;
+		sqn |= (uint32_t)(*(int32_t *)&sqn1 >> 31);
+		if (!mqpoly_sqnorm_is_acceptable(logn, sqn)) {
+			continue;
+		}
+		int16_t *s2 = (int16_t *)ut3;
+
+#else
+		/*
+		 * We stay here in the floating-point domain for the
+		 * application of the basis. This happens to be faster
+		 * on our test platforms with a hardware FPU.
+		 */
 
 		/* Get the lattice point corresponding to the sampled
-		   vector.
-		   TODO: move this chunk of code to sign_fpoly.c? */
-		memcpy(tx, t0, n * sizeof(fpr));
-		memcpy(ty, t1, n * sizeof(fpr));
-		fpoly_mul_fft(logn, tx, b00);
-		fpoly_mul_fft(logn, ty, b10);
-		fpoly_add(logn, tx, ty);
-		memcpy(ty, t0, n * sizeof(fpr));
-		fpoly_mul_fft(logn, ty, b01);
-		memcpy(t0, tx, n * sizeof(fpr));
-		fpoly_mul_fft(logn, t1, b11);
-		fpoly_add(logn, t1, ty);
+		   vector. This means computing:
+		      [v0,v1] = [t0,t1] * [[g, -f], [G, -F]]
+		   hence:
+		      v0 = t0*g + t1*G
+		      v1 = -t0*f - t1*F
+		   First 2*n slots of tmp[] are free. */
+		f = (int8_t *)tmp + 32 * n;
+		g = f + n;
+		(void)trim_i8_decode(logn, sign_key_fgF, f, nbits);
+		(void)trim_i8_decode(logn, sign_key_fgF + flen, g, nbits);
+		fpr *w0 = (fpr *)tmp;
+		fpr *w1 = w0 + n;
+		fpoly_set_small(logn, w0, g);
+		fpoly_set_small(logn, w1, f);
+		fpoly_FFT(logn, w0);
+		fpoly_FFT(logn, w1);
+		fpoly_mul_fft(logn, w1, t0);
+		fpoly_mul_fft(logn, t0, w0);
+		fpoly_set_small(logn, w0, G);
+		fpoly_FFT(logn, w0);
+		fpoly_mul_fft(logn, w0, t1);
+		fpoly_add(logn, t0, w0);
+		fpoly_set_small(logn, w0, F);
+		fpoly_FFT(logn, w0);
+		fpoly_mul_fft(logn, t1, w0);
+		fpoly_add(logn, t1, w1);
+		fpoly_neg(logn, t1);
 		fpoly_iFFT(logn, t0);
 		fpoly_iFFT(logn, t1);
 
@@ -222,7 +390,7 @@ sign_core(unsigned logn,
 			sqn += (uint32_t)(z1 * z1);
 			ng |= sqn;
 		}
-		int16_t *s2 = (int16_t *)tx;
+		int16_t *s2 = (int16_t *)tmp;
 		for (size_t i = 0; i < n; i += 2) {
 			__m128d xt = _mm_loadu_pd((const double *)t1 + i);
 			__m128i zt = _mm_cvtpd_epi32(xt);
@@ -256,7 +424,7 @@ sign_core(unsigned logn,
 			sqn += (uint32_t)(z1 * z1);
 			ng |= sqn;
 		}
-		int16_t *s2 = (int16_t *)tx;
+		int16_t *s2 = (int16_t *)tmp;
 		for (size_t i = 0; i < n; i += 2) {
 			float64x2_t xt = vld1q_f64((const float64_t *)t1 + i);
 			int64x2_t zt = vcvtnq_s64_f64(xt);
@@ -280,7 +448,7 @@ sign_core(unsigned logn,
 			sqn += (uint32_t)(z * z);
 			ng |= sqn;
 		}
-		int16_t *s2 = (int16_t *)tx;
+		int16_t *s2 = (int16_t *)tmp;
 		for (size_t i = 0; i < n; i ++) {
 			uint16_t zu = -(uint16_t)f64_rint(tt1[i]);
 			int32_t z = *(int16_t *)&zu;
@@ -295,7 +463,7 @@ sign_core(unsigned logn,
 			sqn += (uint32_t)(z * z);
 			ng |= sqn;
 		}
-		int16_t *s2 = (int16_t *)tx;
+		int16_t *s2 = (int16_t *)tmp;
 		for (size_t i = 0; i < n; i ++) {
 			uint16_t zu = -(uint16_t)fpr_rint(t1[i]);
 			int32_t z = *(int16_t *)&zu;
@@ -313,6 +481,7 @@ sign_core(unsigned logn,
 		if (!mqpoly_sqnorm_is_acceptable(logn, sqn)) {
 			continue;
 		}
+#endif
 
 		/* We have a candidate signature; we must encode it. This
 		   may fail, if the signature cannot be encoded in the
