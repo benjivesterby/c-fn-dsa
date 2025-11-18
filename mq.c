@@ -33,7 +33,7 @@ static inline uint32_t
 mq_sub(uint32_t x, uint32_t y)
 {
 	x -= y;
-	x += Q & (y >> 16);
+	x += Q & (x >> 16);
 	return x;
 }
 
